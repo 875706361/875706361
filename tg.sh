@@ -13,7 +13,7 @@ while true
 do
 	echo
 	clay
-	read -p "请输入选项(1|2|q):"choice
+	read -p "请输入选项(1|2|q):" choice
 	case $choice in
 	1)
 	echo "MTProxy代理正在安装..."
