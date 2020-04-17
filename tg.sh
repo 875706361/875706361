@@ -33,7 +33,7 @@ do
 	curl -s https://core.telegram.org/getProxyConfig -o proxy-multi.conf
 	echo "生成代理密匙"
 	a=`head -c 16 /dev/urandom | xxd -ps`
-	duankou="6677"
+        read -p "请输入代理端口: " duankou
 	echo "启动MTP服务端"
 	nohup ./mtproto-proxy -u nobody -p 8888 -H ${duankou} -S ${a} --aes-pwd proxy-secret proxy-multi.conf -M 1 &
 	echo "客户连接配置:"
