@@ -1,5 +1,5 @@
 #!/bin/bash
-#uthor junxi by
+#author junxi by
 #this script is only for CentOS 7.x
 #check the OS
 platform=`uname -i`
