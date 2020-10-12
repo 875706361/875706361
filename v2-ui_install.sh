@@ -15,3 +15,4 @@ cd /tmp
 wget https://raw.githubusercontent.com/sprov065/v2-ui/master/v2-ui.sh
 mv v2-ui.sh /usr/bin/v2-ui
 chmod 777 /usr/bin/v2-ui
+v2-ui
