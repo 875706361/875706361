@@ -76,6 +76,12 @@ iptables -A INPUT -p tcp -m tcp --dport 27000:65535 -m connlimit --connlimit-abo
 	echo "允许0:2000端口通过
 2001:26000端口限制50连接数
 27000:65535端口限制50连接数"
+	read -p "" z
+	case $z in
+	*)
+	exit
+	;;
+	esac
 }
 
 function zidingyi_guize
@@ -98,6 +104,9 @@ function chakan
 	case $kan in
 	1)
 	cat /etc/sysconfig/iptables
+	;;
+	*)
+	exit
 	;;
 	2)
 	vi /etc/sysconfig/iptables
