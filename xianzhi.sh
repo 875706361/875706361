@@ -88,21 +88,6 @@ function zidingyi_guize
 	esac
 }
 
-function chakan
-{
-	echo "iptables防火墙配置文件路劲：/etc/sysconfig/iptables"
-	echo "请输入查看或者编辑:1查看
-	2编辑"
-	read -p "请输入[1|2]：" kan
-	case $kan in
-	1)
-	cat /etc/sysconfig/iptables
-	;;
-	2)
-	vi /etc/sysconfig/iptables
-	esac
-}
-
 while true
 do
 	clear
@@ -124,9 +109,6 @@ do
 		;;
 	4)
 		zidingyi_guize
-		;;
-	5)
-		chakan
 		;;
 	q|Q)
 		exit
