@@ -9,6 +9,7 @@ function print_tips
 	echo "(2)卸载iptables防火墙"
 	echo "(3)导入默认连接数限制防火墙规则"
 	echo "(4)输入自定义防火墙规则"
+	echo "查看防火墙规则文件配置内容"
 	echo "(q|Q)退出脚本"
 	echo "********************************"
 }
@@ -65,6 +66,8 @@ function guize
 	iptables -A INPUT -p tcp -m tcp --dport 0:2000 -j ACCEPT
 iptables -A INPUT -p tcp -m tcp --dport 2001:26000 -m connlimit --connlimit-above 50 --connlimit-mask 32 --connlimit-saddr -j DROP
 iptables -A INPUT -p tcp -m tcp --dport 27000:65535 -m connlimit --connlimit-above 50 --connlimit-mask 32 --connlimit-saddr -j DROP
+	yum list | grep initscripts
+	yum install initscripts
 	service iptables save	#保存以上规则
 	systemctl start iptables.service	#重启iptables防火墙
 	echo "**************************"
@@ -83,6 +86,21 @@ function zidingyi_guize
 	read -p "请输入自定义允许通过端口: " duan
 	case $duan in
 	#eiptables -A INPUT -p tcp -m tcp --dport $duankou -j ACCEPT
+	esac
+}
+
+function chakan
+{
+	echo "iptables防火墙配置文件路劲：/etc/sysconfig/iptables"
+	echo "请输入查看或者编辑:1查看
+	2编辑"
+	read -p "请输入[1|2]：" kan
+	case $kan in
+	1)
+	cat /etc/sysconfig/iptables
+	;;
+	2)
+	vi /etc/sysconfig/iptables
 	esac
 }
 
@@ -107,6 +125,9 @@ do
 		;;
 	4)
 		zidingyi_guize
+		;;
+	5)
+		chakan
 		;;
 	q|Q)
 		exit
