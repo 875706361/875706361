@@ -9,7 +9,6 @@ function print_tips
 	echo "(2)卸载iptables防火墙"
 	echo "(3)导入默认连接数限制防火墙规则"
 	echo "(4)输入自定义防火墙规则"
-	echo "查看防火墙规则文件配置内容"
 	echo "(q|Q)退出脚本"
 	echo "********************************"
 }
@@ -76,12 +75,6 @@ iptables -A INPUT -p tcp -m tcp --dport 27000:65535 -m connlimit --connlimit-abo
 	echo "允许0:2000端口通过
 2001:26000端口限制50连接数
 27000:65535端口限制50连接数"
-	read -p "" z
-	case $z in
-	*)
-	exit
-	;;
-	esac
 }
 
 function zidingyi_guize
@@ -104,9 +97,6 @@ function chakan
 	case $kan in
 	1)
 	cat /etc/sysconfig/iptables
-	;;
-	*)
-	exit
 	;;
 	2)
 	vi /etc/sysconfig/iptables
