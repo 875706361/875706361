@@ -28,7 +28,9 @@ function anzhuang
 	echo "安装成功,默认为允许所有端口通过"
 	iptables -P INPUT ACCEPT
 	iptables -A INPUT -p icmp --icmp-type 8 -j ACCEPT
-	service iptables save
+	service iptables save	#保存以上规则
+	systemctl restart iptables.service	#重启iptables防火墙
+	echo "iptables防火墙已重启"
 }
 
 function xiezai
@@ -59,12 +61,14 @@ yum命令卸载请输入2
 
 function guize
 {
-	clear
 	echo "开始导入默认限制连接数规则"
 	echo "**************************"
 	iptables -A INPUT -p tcp -m tcp --dport 0:2000 -j ACCEPT
 iptables -A INPUT -p tcp -m tcp --dport 2001:26000 -m connlimit --connlimit-above 50 --connlimit-mask 32 --connlimit-saddr -j DROP
 iptables -A INPUT -p tcp -m tcp --dport 27000:65535 -m connlimit --connlimit-above 50 --connlimit-mask 32 --connlimit-saddr -j DROP
+	service iptables save	#保存以上规则
+	systemctl start iptables.service	#重启iptables防火墙
+	echo "**************************"
 	echo "默认限制连接数规则导入完毕"
 	echo "**************************"
 	echo "允许0:2000端口通过
