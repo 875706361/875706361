@@ -4,7 +4,6 @@ string="小丑在笑你!"
 
 function print_tips
 {
-	clear
 	echo "*******************************"
 	echo "(1)安装iptables防火墙"
 	echo "(2)卸载iptables防火墙"
