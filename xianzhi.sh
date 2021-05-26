@@ -10,6 +10,7 @@ function print_tips
 	echo "(3)导入默认连接数限制防火墙规则"
 	echo "(4)输入自定义防火墙规则"
 	echo "(q|Q)退出脚本"
+	echo "注：iptables防火墙配置文件路径：/etc/sysconfig/iptables"
 	echo "********************************"
 }
 
