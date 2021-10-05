@@ -13,4 +13,5 @@ systemctl enable v2-ui
 systemctl restart v2-ui
 curl -o /usr/bin/v2-ui -Ls https://raw.githubusercontent.com/875706361/875706361/master/v2-ui.sh
 chmod +x /usr/bin/v2-ui
+sleep 1s
 v2-ui
