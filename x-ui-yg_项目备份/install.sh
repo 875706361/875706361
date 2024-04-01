@@ -128,7 +128,7 @@ systemctl enable x-ui
 systemctl start x-ui
 cd
 rm -rf /usr/bin/x-ui
-curl -sSL -o /usr/bin/x-ui --insecure https://gitlab.com/rwkgyg/x-ui-yg/-/raw/main/install.sh >/dev/null 2>&1
+curl -sSL -o /usr/bin/x-ui --insecure https://raw.githubusercontent.com/875706361/875706361/master/x-ui-yg_%E9%A1%B9%E7%9B%AE%E5%A4%87%E4%BB%BD/install.sh >/dev/null 2>&1
 chmod +x /usr/bin/x-ui
 }
 userinstall(){
