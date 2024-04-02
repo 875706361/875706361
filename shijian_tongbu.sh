@@ -27,8 +27,11 @@ ntpdate \$NTP_SERVER
 # 将系统时间同步到硬件时钟
 hwclock --systohc
 
+# 修改服务器时区为中国上海
+timedatectl set-timezone Asia/Shanghai
+
 # 输出同步完成信息
-echo "系统时间已同步完成。"
+echo "系统时间和时区已同步完成。"
 EOF
 
 # 赋予时间同步脚本执行权限
