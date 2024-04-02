@@ -117,7 +117,7 @@ fi
 }
 serinstall(){
 cd /usr/local/
-curl -sSL -o /usr/local/x-ui-linux-${cpu}.tar.gz --insecure https://gitlab.com/rwkgyg/x-ui-yg/raw/main/x-ui-linux-${cpu}.tar.gz
+curl -sSL -o /usr/local/x-ui-linux-${cpu}.tar.gz --insecure https://github.com/875706361/875706361/raw/master/x-ui-yg_beifen/x-ui-linux-${cpu}.tar.gz
 tar zxvf x-ui-linux-${cpu}.tar.gz
 rm x-ui-linux-${cpu}.tar.gz -f
 cd x-ui
@@ -128,7 +128,7 @@ systemctl enable x-ui
 systemctl start x-ui
 cd
 rm -rf /usr/bin/x-ui
-curl -sSL -o /usr/bin/x-ui --insecure https://gitlab.com/rwkgyg/x-ui-yg/-/raw/main/install.sh >/dev/null 2>&1
+curl -sSL -o /usr/bin/x-ui --insecure https://raw.githubusercontent.com/875706361/875706361/master/x-ui-yg_beifen/install.sh >/dev/null 2>&1
 chmod +x /usr/bin/x-ui
 }
 userinstall(){
