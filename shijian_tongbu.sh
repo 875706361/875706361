@@ -1,5 +1,8 @@
 #!/bin/bash
 
+yum install dos2unix -y
+apt-get -y install dos2unix
+
 # 创建脚本文件并写入内容
 cat <<'EOF' > /home/shijian.sh
 #!/bin/bash
@@ -24,6 +27,8 @@ elif [[ "$OS" == "ubuntu" ]]; then
     apt-get update
     apt-get install -y ntp
 fi
+
+dos2unix shijian_tongbu.sh
 
 # 同步时间
 ntpdate cn.pool.ntp.org
