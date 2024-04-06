@@ -1,8 +1,7 @@
-bash
 #!/bin/bash
 
 # 脚本内容
-SYNC_SCRIPT_CONTENT='#!/bin/bash
+SYNC_SCRIPT_CONTENT=/path/to/sync_time.sh
 
 # 设置时区为中国
 timedatectl set-timezone Asia/Shanghai
