@@ -4,27 +4,25 @@
 cat <<'EOF' > /home/shijian.sh
 #!/bin/bash
 
-# 使用dos2unix命令确保脚本文件格式正确
-yum install dos2unix -y
-apt-get install -y dos2unix
-dos2unix /home/shijian_tongbu.sh
-
 # 设置时区为中国
 timedatectl set-timezone Asia/Shanghai
 
 # 检查系统是否为 CentOS 或 Ubuntu
 if [[ -f /etc/redhat-release ]]; then
     OS="centos"
-    # 安装dos2unix和ntp服务
-    yum install -y dos2unix ntp
 elif [[ -f /etc/lsb-release ]]; then
     OS="ubuntu"
-    # 安装dos2unix和ntp服务
-    apt-get update
-    apt-get install -y dos2unix ntp
 else
     echo "不支持的操作系统"
     exit 1
+fi
+
+# 根据操作系统安装必要的软件包
+if [[ "$OS" == "centos" ]]; then
+    yum install -y ntp
+elif [[ "$OS" == "ubuntu" ]]; then
+    apt-get update
+    apt-get install -y ntp
 fi
 
 # 同步时间
