@@ -1,8 +1,5 @@
 #!/bin/bash
 
-yum install dos2unix -y
-apt-get -y install dos2unix
-
 # 创建脚本文件并写入内容
 cat <<'EOF' > /home/shijian.sh
 #!/bin/bash
@@ -38,10 +35,11 @@ hwclock -w
 echo "时间已同步"
 EOF
 
-dos2unix shijian_tongbu.sh
-
 # 添加执行权限
 chmod +x /home/shijian.sh
+
+#执行脚本
+bash /home/shijian.sh
 
 # 检查是否存在定时任务，如果不存在则添加到 cron 任务中
 if ! crontab -l | grep -q '/home/shijian.sh'; then
