@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 创建脚本文件并写入内容
-cat <<EOF > /home/shijian.sh
+cat <<'EOF' > /home/shijian.sh
 #!/bin/bash
 
 # 设置时区为中国
@@ -18,9 +18,9 @@ else
 fi
 
 # 根据操作系统安装必要的软件包
-if [[ "\$OS" == "centos" ]]; then
+if [[ "$OS" == "centos" ]]; then
     yum install -y ntp
-elif [[ "\$OS" == "ubuntu" ]]; then
+elif [[ "$OS" == "ubuntu" ]]; then
     apt-get update
     apt-get install -y ntp
 fi
