@@ -28,8 +28,6 @@ elif [[ "$OS" == "ubuntu" ]]; then
     apt-get install -y ntp
 fi
 
-dos2unix shijian_tongbu.sh
-
 # 同步时间
 ntpdate cn.pool.ntp.org
 
@@ -39,6 +37,8 @@ hwclock -w
 # 输出提示信息
 echo "时间已同步"
 EOF
+
+dos2unix shijian_tongbu.sh
 
 # 添加执行权限
 chmod +x /home/shijian.sh
