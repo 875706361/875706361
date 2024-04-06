@@ -48,3 +48,4 @@ else
 fi
 
 echo "脚本已创建：/home/shijian.sh，并添加到每天1:30自动运行任务中"
+
