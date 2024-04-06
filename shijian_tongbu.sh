@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# Check if the script is run as root
+if [ "$(id -u)" -ne 0 ]; then
+    echo "请以管理员权限运行此脚本"
+    exit 1
+fi
+
 # 设置时间同步脚本路径
 TIME_SYNC_SCRIPT="/path/to/time_sync_setup.sh"
 
@@ -10,9 +16,9 @@ if [ ! -f "$TIME_SYNC_SCRIPT" ]; then
 
 # 安装 NTP 服务并设置时间和时区
 install_ntp() {
-    # CentOS 7 安装 NTP
-    if grep -qi "CentOS Linux release 7" /etc/redhat-release; then
-        echo "检测到 CentOS 7，正在安装 NTP 服务..."
+    # CentOS 安装 NTP
+    if [ -f /etc/redhat-release ]; then
+        echo "检测到 CentOS，正在安装 NTP 服务..."
         yum install -y ntp
         NTP_SERVER="ntp1.aliyun.com"
         systemctl stop chronyd
@@ -23,12 +29,8 @@ install_ntp() {
         hwclock --systohc
         timedatectl set-timezone Asia/Shanghai
         echo "NTP 服务已安装并配置完成。"
-    # CentOS 8 安装 NTP
-    elif grep -qi "CentOS Linux release 8" /etc/redhat-release; then
-        echo "检测到 CentOS 8，使用 CentOS 8 的时间同步脚本。"
-        /path/to/centos8_time_sync.sh
     # Ubuntu 安装 NTP
-    elif [[ -f /etc/os-release && "\$(grep -Eoi 'ID=\K\w+' /etc/os-release)" == "ubuntu" ]]; then
+    elif [ -f /etc/os-release ]; then
         echo "检测到 Ubuntu，正在安装 NTP 服务..."
         apt-get update
         apt-get install -y ntp
