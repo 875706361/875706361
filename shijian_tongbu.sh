@@ -3,9 +3,6 @@
 # 设置时间同步脚本路径
 TIME_SYNC_SCRIPT="/path/to/time_sync.sh"
 
-#创建文件
-touch "$TIME_SYNC_SCRIPT"
-
 # 创建时间同步脚本文件
 cat <<EOF > "$TIME_SYNC_SCRIPT"
 #!/bin/bash
