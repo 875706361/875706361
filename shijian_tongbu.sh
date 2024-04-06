@@ -27,6 +27,9 @@ fi
 
 # 同步时间
 ntpdate cn.pool.ntp.org
+
+# 将同步后的时间加入系统时间中
+hwclock -w
 EOF
 
 # 添加执行权限
