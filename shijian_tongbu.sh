@@ -1,11 +1,5 @@
 #!/bin/bash
 
-# Check if the script is run as root
-if [ "$EUID" -ne 0 ]; then
-    echo "请以管理员权限运行此脚本"
-    exit 1
-fi
-
 # 设置时间同步脚本路径
 TIME_SYNC_SCRIPT="/path/to/time_sync_setup.sh"
 
