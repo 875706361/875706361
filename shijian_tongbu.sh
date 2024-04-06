@@ -1,41 +1,38 @@
+bash
 #!/bin/bash
 
-# 设置时间同步脚本路径
-TIME_SYNC_SCRIPT="/path/to/time_sync.sh"
+# 脚本内容
+SYNC_SCRIPT_CONTENT='#!/bin/bash
 
-# 创建时间同步脚本文件
-cat <<EOF > "$TIME_SYNC_SCRIPT"
-#!/bin/bash
+# 设置时区为中国
+timedatectl set-timezone Asia/Shanghai
 
-# 安装ntp服务
-yum install -y ntp
+# 检查系统是否为 CentOS 或 Ubuntu
+if [[ -f /etc/redhat-release ]]; then
+    OS="centos"
+elif [[ -f /etc/lsb-release ]]; then
+    OS="ubuntu"
+else
+    echo "不支持的操作系统"
+    exit 1
+fi
 
-# 配置NTP服务器
-NTP_SERVER="ntp1.aliyun.com"
+# 根据操作系统安装必要的软件包
+if [[ "$OS" == "centos" ]]; then
+    yum install -y ntp
+elif [[ "$OS" == "ubuntu" ]]; then
+    apt-get update
+    apt-get install -y ntp
+fi
 
-# 停止并禁用chronyd服务（CentOS 7默认的时间同步服务）
-systemctl stop chronyd
-systemctl disable chronyd
+# 同步时间
+ntpdate cn.pool.ntp.org'
 
-# 启用并启动ntp服务
-systemctl enable ntpd
-systemctl start ntpd
+# 创建脚本文件并写入内容
+echo "$SYNC_SCRIPT_CONTENT" > /path/to/sync_time.sh
 
-# 更新系统时间
-ntpdate \$NTP_SERVER
+# 添加执行权限
+chmod +x /path/to/sync_time.sh
 
-# 将系统时间同步到硬件时钟
-hwclock --systohc
-
-# 输出同步完成信息
-echo "系统时间已同步完成。"
-EOF
-
-# 赋予时间同步脚本执行权限
-chmod +x "$TIME_SYNC_SCRIPT"
-
-# 执行时间同步脚本
-"$TIME_SYNC_SCRIPT"
-
-# 将定时任务添加到crontab中
-(crontab -l ; echo "30 1 * * * $TIME_SYNC_SCRIPT") | crontab -
+# 将脚本添加到 cron 任务中，每天1:30自动执行
+(crontab -l 2>/dev/null; echo "30 1 * * * /path/to/sync_time.sh") | crontab -
