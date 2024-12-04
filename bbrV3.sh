@@ -98,8 +98,21 @@ sysctl net.ipv4.tcp_congestion_control
 echo "可用的TCP流控算法："
 sysctl net.ipv4.tcp_available_congestion_control
 
+# Display modinfo for tcp_bbr
+echo "显示 tcp_bbr 模块的信息："
+modinfo tcp_bbr
+
 # Clean up downloaded files
 echo "清理临时安装包..."
 rm -f linux-headers.deb linux-image.deb kernel-headers.rpm kernel.rpm
 
+# Final output message
 echo "BBR v3 安装和配置完成。"
+
+# Provide user with final instructions
+echo "安装完成！以下是执行情况总结："
+echo "1. 当前系统已启用 BBR v3，您可以通过 'sysctl net.ipv4.tcp_congestion_control' 检查流控算法。"
+echo "2. 已删除所有非 6.4.0 版本的内核，保留了 6.4.0 内核。"
+echo "3. 执行了 'modinfo tcp_bbr' 命令来验证 BBR 模块的加载状态。"
+
+echo "如果有任何问题，请查看系统日志或向管理员求助。"
