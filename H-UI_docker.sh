@@ -137,6 +137,13 @@ remove_h_ui() {
     echo -e "${GREEN}H-UI 容器及数据已清理。${RESET}"
 }
 
+# 进入容器
+enter_h_ui_container() {
+    separator
+    echo -e "${YELLOW}正在进入 H-UI 容器...${RESET}"
+    docker exec -it $CONTAINER_NAME /bin/bash
+}
+
 # 主菜单
 main_menu() {
     while true; do
@@ -150,22 +157,7 @@ main_menu() {
         echo -e "5. 停止 H-UI 容器"
         echo -e "6. 重启 H-UI 容器"
         echo -e "7. 删除 H-UI 容器及数据"
-        echo -e "8. 退出"
+        echo -e "8. 进入 H-UI 容器"
+        echo -e "9. 退出"
         separator
-        read -p "请选择操作 (1-8): " choice
-        case $choice in
-            1) install_h_ui ;;
-            2) get_h_ui_credentials ;;
-            3) reset_h_ui_credentials ;;
-            4) status_h_ui ;;
-            5) stop_h_ui ;;
-            6) restart_h_ui ;;
-            7) remove_h_ui ;;
-            8) exit 0 ;;
-            *) echo -e "${RED}无效输入，请重新选择。${RESET}" ;;
-        esac
-    done
-}
-
-# 运行主菜单
-main_menu
+::contentReference[oaicite:0]{index=0}
