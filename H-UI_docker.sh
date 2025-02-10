@@ -88,37 +88,43 @@ install_h_ui() {
         docker pull $IMAGE_NAME
     fi
 
-    # 让用户输入容器名称
-    read -p "请输入容器名称 (默认: $DEFAULT_CONTAINER_NAME): " container_name
-    container_name=${container_name:-$DEFAULT_CONTAINER_NAME}
-
     # 让用户输入映射端口
     read -p "请输入 H-UI 访问端口 (默认: $DEFAULT_PORT): " port
     port=${port:-$DEFAULT_PORT}
 
-    # 让用户选择数据存储目录
-    read -p "请输入 H-UI 数据存储路径 (默认: $DEFAULT_DATA_DIR): " data_dir
-    data_dir=${data_dir:-$DEFAULT_DATA_DIR}
-
     # 创建数据存储目录（如果不存在）
-    mkdir -p $data_dir
+    mkdir -p $DEFAULT_DATA_DIR
 
     # 运行 Docker 容器
     echo -e "${YELLOW}启动 H-UI 容器中...${RESET}"
-    docker run -d --name $container_name \
+    docker run -d --name $DEFAULT_CONTAINER_NAME \
       -p $port:8080 \
-      -v $data_dir:/app/data \
+      -v $DEFAULT_DATA_DIR:/app/data \
       --restart unless-stopped \
       $IMAGE_NAME
 
     # 检查是否启动成功
-    if [[ $(docker ps -q -f name=$container_name) ]]; then
+    if [[ $(docker ps -q -f name=$DEFAULT_CONTAINER_NAME) ]]; then
         echo -e "${GREEN}H-UI 已成功安装并运行！${RESET}"
         echo -e "访问地址: ${GREEN}http://localhost:$port${RESET}"
     else
         echo -e "${RED}H-UI 安装失败，请检查 Docker 日志。${RESET}"
-        docker logs $container_name
+        docker logs $DEFAULT_CONTAINER_NAME
     fi
+}
+
+# 获取 H-UI 账号密码
+get_h_ui_credentials() {
+    separator
+    echo -e "${GREEN}正在获取 H-UI 账号和密码...${RESET}"
+    docker logs $DEFAULT_CONTAINER_NAME 2>&1 | grep "账号"
+}
+
+# 进入容器修改管理员密码
+change_admin_password() {
+    separator
+    echo -e "${YELLOW}进入 H-UI 容器修改管理员密码...${RESET}"
+    docker exec -it $DEFAULT_CONTAINER_NAME /bin/sh
 }
 
 # 查看容器状态
@@ -170,13 +176,6 @@ remove_h_ui() {
     docker stop $DEFAULT_CONTAINER_NAME &>/dev/null
     docker rm $DEFAULT_CONTAINER_NAME &>/dev/null
     echo -e "${GREEN}H-UI 容器已删除。${RESET}"
-
-    read -p "是否重新安装 H-UI？(y/n): " reinstall_choice
-    if [[ "$reinstall_choice" == "y" || "$reinstall_choice" == "Y" ]]; then
-        install_h_ui
-    else
-        echo -e "${YELLOW}已取消重新安装。${RESET}"
-    fi
 }
 
 # 主菜单
@@ -186,20 +185,24 @@ main_menu() {
         echo -e "${GREEN}H-UI Docker 管理脚本${RESET}"
         separator
         echo -e "1. 安装/重新安装 H-UI"
-        echo -e "2. 查看容器状态"
-        echo -e "3. 停止 H-UI 容器"
-        echo -e "4. 重启 H-UI 容器"
-        echo -e "5. 删除 H-UI 容器"
-        echo -e "6. 退出"
+        echo -e "2. 查看 H-UI 账号密码"
+        echo -e "3. 进入容器修改管理员密码"
+        echo -e "4. 查看容器状态"
+        echo -e "5. 停止 H-UI 容器"
+        echo -e "6. 重启 H-UI 容器"
+        echo -e "7. 删除 H-UI 容器"
+        echo -e "8. 退出"
         separator
-        read -p "请选择操作 (1-6): " choice
+        read -p "请选择操作 (1-8): " choice
         case $choice in
             1) install_h_ui ;;
-            2) status_h_ui ;;
-            3) stop_h_ui ;;
-            4) restart_h_ui ;;
-            5) remove_h_ui ;;
-            6) exit 0 ;;
+            2) get_h_ui_credentials ;;
+            3) change_admin_password ;;
+            4) status_h_ui ;;
+            5) stop_h_ui ;;
+            6) restart_h_ui ;;
+            7) remove_h_ui ;;
+            8) exit 0 ;;
             *) echo -e "${RED}无效输入，请重新选择。${RESET}" ;;
         esac
     done
