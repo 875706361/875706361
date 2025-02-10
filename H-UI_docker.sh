@@ -40,7 +40,6 @@ get_h_ui_credentials() {
     separator
     echo -e "${GREEN}正在获取 H-UI 账号和密码...${RESET}"
     
-    # 查找账号和密码
     creds=$(docker logs $CONTAINER_NAME 2>&1 | grep -E "账号|密码")
     
     if [[ -n "$creds" ]]; then
@@ -58,12 +57,9 @@ reset_h_ui_credentials() {
     separator
     echo -e "${YELLOW}正在重置 H-UI 账号密码...${RESET}"
 
-    docker exec -it $CONTAINER_NAME /h-ui reset
+    docker exec -it $CONTAINER_NAME ./h-ui reset
 
-    # 等待 3 秒，确保重置完成
     sleep 3
-
-    # 获取重置后的账号密码
     get_h_ui_credentials
 }
 
