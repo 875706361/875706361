@@ -11,7 +11,6 @@ CONTAINER_NAME="h-ui"
 IMAGE_NAME="jonssonyan/h-ui"
 HUI_DIR="/h-ui"
 DEFAULT_WEB_PORT=8081
-DEFAULT_SSH_PORT=8082
 
 # 分隔线
 separator() {
@@ -46,6 +45,12 @@ container_status() {
     fi
 }
 
+# 检查端口占用
+check_port_usage() {
+    local port=$1
+    sudo lsof -i :$port
+}
+
 # 安装 H-UI
 install_h_ui() {
     install_docker
@@ -64,10 +69,6 @@ install_h_ui() {
     read -p "请输入 H-UI Web 端口 (默认: $DEFAULT_WEB_PORT): " web_port
     web_port=${web_port:-$DEFAULT_WEB_PORT}
 
-    # 让用户输入 SSH 本地转发端口
-    read -p "请输入 H-UI SSH 本地转发端口 (默认: $DEFAULT_SSH_PORT): " ssh_port
-    ssh_port=${ssh_port:-$DEFAULT_SSH_PORT}
-
     # 设置时区
     echo -e "${YELLOW}默认时区为 Asia/Shanghai...${RESET}"
 
@@ -81,13 +82,12 @@ install_h_ui() {
       -v $HUI_DIR/data:/h-ui/data \
       -v $HUI_DIR/export:/h-ui/export \
       -v $HUI_DIR/logs:/h-ui/logs \
-      $IMAGE_NAME ./h-ui -p $web_port -s $ssh_port
+      $IMAGE_NAME ./h-ui -p $web_port
 
     # 检查是否启动成功
     if [[ $(docker ps -q -f name=$CONTAINER_NAME) ]]; then
         echo -e "${GREEN}H-UI 已成功安装并运行！${RESET}"
         echo -e "Web 访问地址: ${GREEN}http://localhost:$web_port${RESET}"
-        echo -e "SSH 本地转发端口: ${GREEN}$ssh_port${RESET}"
     else
         echo -e "${RED}H-UI 安装失败，请检查 Docker 日志。${RESET}"
         docker logs $CONTAINER_NAME
@@ -98,14 +98,7 @@ install_h_ui() {
 get_h_ui_credentials() {
     separator
     echo -e "${GREEN}正在获取 H-UI 账号和密码...${RESET}"
-    docker logs $CONTAINER_NAME 2>&1 | grep "账号" || echo -e "${RED}无法获取账号信息，请检查容器日志！${RESET}"
-}
-
-# 进入容器修改管理员密码
-change_admin_password() {
-    separator
-    echo -e "${YELLOW}进入 H-UI 容器修改管理员密码...${RESET}"
-    docker exec -it $CONTAINER_NAME /bin/sh
+    docker logs $CONTAINER_NAME 2>&1 | grep "账号"
 }
 
 # 查看容器状态
@@ -169,22 +162,25 @@ main_menu() {
         separator
         echo -e "1. 安装/重新安装 H-UI"
         echo -e "2. 查看 H-UI 账号密码"
-        echo -e "3. 进入容器修改管理员密码"
-        echo -e "4. 查看容器状态"
-        echo -e "5. 停止 H-UI 容器"
-        echo -e "6. 重启 H-UI 容器"
-        echo -e "7. 删除 H-UI 容器及数据"
+        echo -e "3. 查看容器状态"
+        echo -e "4. 停止 H-UI 容器"
+        echo -e "5. 重启 H-UI 容器"
+        echo -e "6. 删除 H-UI 容器及数据"
+        echo -e "7. 检查端口占用"
         echo -e "8. 退出"
         separator
         read -p "请选择操作 (1-8): " choice
         case $choice in
             1) install_h_ui ;;
             2) get_h_ui_credentials ;;
-            3) change_admin_password ;;
-            4) status_h_ui ;;
-            5) stop_h_ui ;;
-            6) restart_h_ui ;;
-            7) remove_h_ui ;;
+            3) status_h_ui ;;
+            4) stop_h_ui ;;
+            5) restart_h_ui ;;
+            6) remove_h_ui ;;
+            7) 
+                read -p "请输入要检查的端口: " port
+                check_port_usage $port
+                ;;
             8) exit 0 ;;
             *) echo -e "${RED}无效输入，请重新选择。${RESET}" ;;
         esac
