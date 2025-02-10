@@ -10,24 +10,15 @@ RESET="\033[0m"
 CONTAINER_NAME="h-ui"
 IMAGE_NAME="jonssonyan/h-ui"
 HUI_DIR="/h-ui"
-DEFAULT_PORT=8081
+DEFAULT_WEB_PORT=8081
+DEFAULT_SSH_PORT=8082
 
 # 分隔线
 separator() {
     echo -e "${YELLOW}---------------------------------${RESET}"
 }
 
-# 检测 Linux 发行版
-detect_os() {
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS=$ID
-    else
-        OS=$(uname -s)
-    fi
-}
-
-# 安装 Docker
+# 安装 Docker（官方推荐方式）
 install_docker() {
     separator
     echo -e "${GREEN}正在检测并安装 Docker...${RESET}"
@@ -37,26 +28,7 @@ install_docker() {
         return
     fi
 
-    detect_os
-    case "$OS" in
-        almalinux|centos|rocky)
-            sudo yum install -y yum-utils
-            sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-            sudo yum install -y docker-ce docker-ce-cli containerd.io
-            ;;
-        ubuntu|debian)
-            sudo apt update
-            sudo apt install -y apt-transport-https ca-certificates curl software-properties-common
-            curl -fsSL https://download.docker.com/linux/$OS/gpg | sudo apt-key add -
-            sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/$OS $(lsb_release -cs) stable"
-            sudo apt update
-            sudo apt install -y docker-ce docker-ce-cli containerd.io
-            ;;
-        *)
-            echo -e "${RED}不支持的 Linux 发行版，请手动安装 Docker。${RESET}"
-            exit 1
-            ;;
-    esac
+    bash <(curl -fsSL https://get.docker.com)
 
     sudo systemctl enable docker
     sudo systemctl start docker
@@ -88,9 +60,16 @@ install_h_ui() {
     # 创建挂载目录
     mkdir -p $HUI_DIR/{bin,data,export,logs}
 
-    # 让用户输入映射端口
-    read -p "请输入 H-UI 访问端口 (默认: $DEFAULT_PORT): " port
-    port=${port:-$DEFAULT_PORT}
+    # 让用户输入 Web 端口
+    read -p "请输入 H-UI Web 端口 (默认: $DEFAULT_WEB_PORT): " web_port
+    web_port=${web_port:-$DEFAULT_WEB_PORT}
+
+    # 让用户输入 SSH 本地转发端口
+    read -p "请输入 H-UI SSH 本地转发端口 (默认: $DEFAULT_SSH_PORT): " ssh_port
+    ssh_port=${ssh_port:-$DEFAULT_SSH_PORT}
+
+    # 设置时区
+    echo -e "${YELLOW}默认时区为 Asia/Shanghai...${RESET}"
 
     # 运行 Docker 容器（使用 host 网络模式）
     echo -e "${YELLOW}启动 H-UI 容器中...${RESET}"
@@ -102,12 +81,13 @@ install_h_ui() {
       -v $HUI_DIR/data:/h-ui/data \
       -v $HUI_DIR/export:/h-ui/export \
       -v $HUI_DIR/logs:/h-ui/logs \
-      $IMAGE_NAME ./h-ui -p $port
+      $IMAGE_NAME ./h-ui -p $web_port -s $ssh_port
 
     # 检查是否启动成功
     if [[ $(docker ps -q -f name=$CONTAINER_NAME) ]]; then
         echo -e "${GREEN}H-UI 已成功安装并运行！${RESET}"
-        echo -e "访问地址: ${GREEN}http://localhost:$port${RESET}"
+        echo -e "Web 访问地址: ${GREEN}http://localhost:$web_port${RESET}"
+        echo -e "SSH 本地转发端口: ${GREEN}$ssh_port${RESET}"
     else
         echo -e "${RED}H-UI 安装失败，请检查 Docker 日志。${RESET}"
         docker logs $CONTAINER_NAME
@@ -118,7 +98,7 @@ install_h_ui() {
 get_h_ui_credentials() {
     separator
     echo -e "${GREEN}正在获取 H-UI 账号和密码...${RESET}"
-    docker logs $CONTAINER_NAME 2>&1 | grep "账号"
+    docker logs $CONTAINER_NAME 2>&1 | grep "账号" || echo -e "${RED}无法获取账号信息，请检查容器日志！${RESET}"
 }
 
 # 进入容器修改管理员密码
