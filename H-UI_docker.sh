@@ -194,4 +194,4 @@ main_menu() {
 }
 
 # 运行主菜单
-main_men
+main_menu
