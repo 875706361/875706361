@@ -45,12 +45,6 @@ container_status() {
     fi
 }
 
-# 检查端口占用
-check_port_usage() {
-    local port=$1
-    sudo lsof -i :$port
-}
-
 # 安装 H-UI
 install_h_ui() {
     install_docker
@@ -84,6 +78,12 @@ install_h_ui() {
       -v $HUI_DIR/logs:/h-ui/logs \
       $IMAGE_NAME ./h-ui -p $web_port
 
+    # 等待 5 秒，确保容器启动
+    sleep 5
+
+    # 获取默认账号密码
+    get_h_ui_credentials
+
     # 检查是否启动成功
     if [[ $(docker ps -q -f name=$CONTAINER_NAME) ]]; then
         echo -e "${GREEN}H-UI 已成功安装并运行！${RESET}"
@@ -98,7 +98,18 @@ install_h_ui() {
 get_h_ui_credentials() {
     separator
     echo -e "${GREEN}正在获取 H-UI 账号和密码...${RESET}"
-    docker logs $CONTAINER_NAME 2>&1 | grep "账号"
+    
+    # 查找账号和密码
+    creds=$(docker logs $CONTAINER_NAME 2>&1 | grep -E "账号|密码")
+    
+    if [[ -n "$creds" ]]; then
+        echo -e "${GREEN}H-UI 默认账号信息:${RESET}"
+        echo -e "${YELLOW}$creds${RESET}"
+    else
+        echo -e "${RED}无法获取账号信息，请检查容器日志！${RESET}"
+        echo -e "${YELLOW}您可以手动运行以下命令查看日志：${RESET}"
+        echo -e "${GREEN}docker logs $CONTAINER_NAME | grep '账号'${RESET}"
+    fi
 }
 
 # 查看容器状态
@@ -166,10 +177,9 @@ main_menu() {
         echo -e "4. 停止 H-UI 容器"
         echo -e "5. 重启 H-UI 容器"
         echo -e "6. 删除 H-UI 容器及数据"
-        echo -e "7. 检查端口占用"
-        echo -e "8. 退出"
+        echo -e "7. 退出"
         separator
-        read -p "请选择操作 (1-8): " choice
+        read -p "请选择操作 (1-7): " choice
         case $choice in
             1) install_h_ui ;;
             2) get_h_ui_credentials ;;
@@ -177,15 +187,11 @@ main_menu() {
             4) stop_h_ui ;;
             5) restart_h_ui ;;
             6) remove_h_ui ;;
-            7) 
-                read -p "请输入要检查的端口: " port
-                check_port_usage $port
-                ;;
-            8) exit 0 ;;
+            7) exit 0 ;;
             *) echo -e "${RED}无效输入，请重新选择。${RESET}" ;;
         esac
     done
 }
 
 # 运行主菜单
-main_menu
+main_men
