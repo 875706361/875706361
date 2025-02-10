@@ -92,7 +92,7 @@ install_h_ui() {
       $IMAGE_NAME ./h-ui -p $web_port
 
     sleep 5
-    get_h_ui_credentials
+    reset_h_ui_credentials  # 自动重置账号密码
 
     if [[ $(docker ps -q -f name=$CONTAINER_NAME) ]]; then
         echo -e "${GREEN}H-UI 已成功安装并运行！${RESET}"
@@ -137,10 +137,10 @@ remove_h_ui() {
     echo -e "${GREEN}H-UI 容器及数据已清理。${RESET}"
 }
 
-# 进入容器
-enter_h_ui_container() {
+# 进入容器命令
+enter_container() {
     separator
-    echo -e "${YELLOW}正在进入 H-UI 容器...${RESET}"
+    echo -e "${GREEN}正在进入 H-UI 容器...${RESET}"
     docker exec -it $CONTAINER_NAME /bin/bash
 }
 
@@ -160,4 +160,21 @@ main_menu() {
         echo -e "8. 进入 H-UI 容器"
         echo -e "9. 退出"
         separator
-::contentReference[oaicite:0]{index=0}
+        read -p "请选择操作 (1-9): " choice
+        case $choice in
+            1) install_h_ui ;;
+            2) get_h_ui_credentials ;;
+            3) reset_h_ui_credentials ;;
+            4) status_h_ui ;;
+            5) stop_h_ui ;;
+            6) restart_h_ui ;;
+            7) remove_h_ui ;;
+            8) enter_container ;;
+            9) exit 0 ;;
+            *) echo -e "${RED}无效输入，请重新选择。${RESET}" ;;
+        esac
+    done
+}
+
+# 运行主菜单
+main_menu
