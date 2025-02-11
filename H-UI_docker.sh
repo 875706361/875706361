@@ -79,7 +79,8 @@ install_h_ui() {
     if [[ $(docker ps -q -f name=$CONTAINER_NAME) ]]; then
         echo -e "${GREEN}H-UI 已成功安装并运行！${RESET}"
         echo -e "Web 访问地址: ${GREEN}http://localhost:$web_port${RESET}"
-        echo -e "${YELLOW}H-UI 配置文件路径: ${HUI_DIR}/data/config.yaml${RESET}"
+        echo -e "${YELLOW}H-UI 配置文件路径（宿主机）:${RESET}"
+        echo -e "${GREEN}$HUI_DIR/data/config.yaml${RESET}"
     else
         echo -e "${RED}H-UI 安装失败，请检查 Docker 日志。${RESET}"
         docker logs $CONTAINER_NAME
