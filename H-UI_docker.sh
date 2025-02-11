@@ -35,23 +35,6 @@ install_docker() {
     echo -e "${GREEN}Docker 安装完成！${RESET}"
 }
 
-# 获取 H-UI 账号密码
-get_h_ui_credentials() {
-    separator
-    echo -e "${GREEN}正在获取 H-UI 账号和密码...${RESET}"
-    
-    creds=$(docker logs $CONTAINER_NAME 2>&1 | grep -E "账号|密码")
-    
-    if [[ -n "$creds" ]]; then
-        echo -e "${GREEN}H-UI 默认账号信息:${RESET}"
-        echo -e "${YELLOW}$creds${RESET}"
-    else
-        echo -e "${RED}无法获取账号信息，请检查容器日志！${RESET}"
-        echo -e "${YELLOW}您可以手动运行以下命令查看日志：${RESET}"
-        echo -e "${GREEN}docker logs $CONTAINER_NAME | grep '账号'${RESET}"
-    fi
-}
-
 # 重置 H-UI 账号密码
 reset_h_ui_credentials() {
     separator
@@ -60,7 +43,6 @@ reset_h_ui_credentials() {
     docker exec -it $CONTAINER_NAME ./h-ui reset
 
     sleep 3
-    get_h_ui_credentials
 }
 
 # 安装 H-UI
@@ -97,6 +79,7 @@ install_h_ui() {
     if [[ $(docker ps -q -f name=$CONTAINER_NAME) ]]; then
         echo -e "${GREEN}H-UI 已成功安装并运行！${RESET}"
         echo -e "Web 访问地址: ${GREEN}http://localhost:$web_port${RESET}"
+        echo -e "${YELLOW}H-UI 配置文件路径: ${HUI_DIR}/data/config.yaml${RESET}"
     else
         echo -e "${RED}H-UI 安装失败，请检查 Docker 日志。${RESET}"
         docker logs $CONTAINER_NAME
@@ -151,26 +134,24 @@ main_menu() {
         echo -e "${GREEN}H-UI Docker 管理脚本${RESET}"
         separator
         echo -e "1. 安装/重新安装 H-UI"
-        echo -e "2. 查看 H-UI 账号密码"
-        echo -e "3. 重置 H-UI 账号密码"
-        echo -e "4. 查看容器状态"
-        echo -e "5. 停止 H-UI 容器"
-        echo -e "6. 重启 H-UI 容器"
-        echo -e "7. 删除 H-UI 容器及数据"
-        echo -e "8. 进入 H-UI 容器"
-        echo -e "9. 退出"
+        echo -e "2. 重置 H-UI 账号密码"
+        echo -e "3. 查看容器状态"
+        echo -e "4. 停止 H-UI 容器"
+        echo -e "5. 重启 H-UI 容器"
+        echo -e "6. 删除 H-UI 容器及数据"
+        echo -e "7. 进入 H-UI 容器"
+        echo -e "8. 退出"
         separator
-        read -p "请选择操作 (1-9): " choice
+        read -p "请选择操作 (1-8): " choice
         case $choice in
             1) install_h_ui ;;
-            2) get_h_ui_credentials ;;
-            3) reset_h_ui_credentials ;;
-            4) status_h_ui ;;
-            5) stop_h_ui ;;
-            6) restart_h_ui ;;
-            7) remove_h_ui ;;
-            8) enter_container ;;
-            9) exit 0 ;;
+            2) reset_h_ui_credentials ;;
+            3) status_h_ui ;;
+            4) stop_h_ui ;;
+            5) restart_h_ui ;;
+            6) remove_h_ui ;;
+            7) enter_container ;;
+            8) exit 0 ;;
             *) echo -e "${RED}无效输入，请重新选择。${RESET}" ;;
         esac
     done
