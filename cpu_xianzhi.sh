@@ -5,7 +5,9 @@ GREEN="\e[32m"
 RED="\e[31m"
 RESET="\e[0m"
 
-# 日志文件
+# 相关文件路径
+SCRIPT_PATH="/usr/local/bin/cpu_limit.sh"
+SERVICE_PATH="/etc/systemd/system/cpu_limit.service"
 LOG_FILE="/var/log/cpu_limit.log"
 
 # 检测系统类型
@@ -49,76 +51,103 @@ install_cpulimit() {
     fi
 }
 
-# 限制高 CPU 占用进程
-limit_high_cpu_processes() {
-    echo -e "${GREEN}启动 CPU 限制进程...${RESET}"
-    echo "$(date) - CPU 限制进程已启动" >> "$LOG_FILE"
+# 创建 CPU 限制脚本
+create_cpu_limit_script() {
+    echo -e "${GREEN}创建 CPU 监控脚本...${RESET}"
+    cat > "$SCRIPT_PATH" <<EOF
+#!/bin/bash
 
-    while true; do
-        # 查找 CPU 使用率超过 90% 的进程
-        high_cpu_process=$(ps -eo pid,%cpu,comm --sort=-%cpu | awk '$2>90 {print $1}' | head -n 1)
+LOG_FILE="/var/log/cpu_limit.log"
 
-        if [ -n "$high_cpu_process" ]; then
-            echo -e "${GREEN}发现 CPU 超 90% 进程 (PID: $high_cpu_process)，限制其使用率...${RESET}"
-            echo "$(date) - 限制进程 $high_cpu_process CPU 占用" >> "$LOG_FILE"
-            cpulimit -p "$high_cpu_process" -l 90 -b
-        fi
+echo "\$(date) - 启动 CPU 限制进程..." >> "\$LOG_FILE"
 
-        sleep 5  # 每 5 秒检查一次
-    done
+while true; do
+    # 查找 CPU 使用率超过 90% 的进程
+    high_cpu_process=\$(ps -eo pid,%cpu,comm --sort=-%cpu | awk '\$2>90 {print \$1}' | head -n 1)
+
+    if [ -n "\$high_cpu_process" ]; then
+        echo "\$(date) - 限制进程 \$high_cpu_process CPU 占用" >> "\$LOG_FILE"
+        cpulimit -p "\$high_cpu_process" -l 90 -b
+    fi
+
+    sleep 5  # 每 5 秒检查一次
+done
+EOF
+
+    chmod +x "$SCRIPT_PATH"
 }
 
-# 停止 CPU 限制
-stop_cpu_limit() {
-    echo -e "${GREEN}正在停止 CPU 限制进程...${RESET}"
-    pkill -f "cpulimit"
-    echo "$(date) - CPU 限制进程已停止" >> "$LOG_FILE"
-    echo -e "${GREEN}CPU 限制已停止！${RESET}"
+# 创建 systemd 服务
+create_systemd_service() {
+    echo -e "${GREEN}创建 systemd 服务...${RESET}"
+    cat > "$SERVICE_PATH" <<EOF
+[Unit]
+Description=CPU 限制进程守护
+After=network.target
+
+[Service]
+ExecStart=$SCRIPT_PATH
+Restart=always
+RestartSec=5
+User=root
+StandardOutput=append:$LOG_FILE
+StandardError=append:$LOG_FILE
+
+[Install]
+WantedBy=multi-user.target
+EOF
 }
 
-# 卸载 cpulimit
-uninstall_cpulimit() {
-    echo -e "${GREEN}正在卸载 cpulimit...${RESET}"
-    
-    stop_cpu_limit  # 先停止正在运行的限制进程
-
-    case "$OS" in
-    ubuntu | debian)
-        apt remove -y cpulimit
-        ;;
-    almalinux | centos | rocky)
-        yum remove -y cpulimit
-        ;;
-    *)
-        echo -e "${RED}不支持的系统类型：$OS${RESET}"
-        exit 1
-        ;;
-    esac
-
-    echo -e "${GREEN}cpulimit 卸载完成！${RESET}"
+# 启动 CPU 限制服务
+start_cpu_limit_service() {
+    echo -e "${GREEN}正在启动 CPU 限制服务...${RESET}"
+    systemctl daemon-reload
+    systemctl start cpu_limit.service
+    systemctl enable cpu_limit.service
+    echo -e "${GREEN}CPU 限制服务已启动！${RESET}"
 }
 
-# 主菜单
+# 停止 CPU 限制服务
+stop_cpu_limit_service() {
+    echo -e "${GREEN}正在停止 CPU 限制服务...${RESET}"
+    systemctl stop cpu_limit.service
+    echo -e "${GREEN}CPU 限制服务已停止！${RESET}"
+}
+
+# 卸载 CPU 限制服务
+uninstall_cpu_limit_service() {
+    echo -e "${GREEN}正在卸载 CPU 限制服务...${RESET}"
+    stop_cpu_limit_service
+    systemctl disable cpu_limit.service
+    rm -f "$SERVICE_PATH"
+    rm -f "$SCRIPT_PATH"
+    systemctl daemon-reload
+    echo -e "${GREEN}CPU 限制进程已卸载！${RESET}"
+}
+
+# 交互式主菜单
 main_menu() {
     while true; do
         clear
         echo -e "${GREEN}===== VPS CPU 限制管理器 =====${RESET}"
-        echo "1. 安装并运行 CPU 限制"
+        echo "1. 安装并启动 CPU 限制"
         echo "2. 停止 CPU 限制"
-        echo "3. 卸载 CPU 限制工具"
+        echo "3. 卸载 CPU 限制"
         echo "4. 退出"
         read -p "请选择操作 (1/2/3/4): " choice
 
         case "$choice" in
         1)
             install_cpulimit
-            limit_high_cpu_processes
+            create_cpu_limit_script
+            create_systemd_service
+            start_cpu_limit_service
             ;;
         2)
-            stop_cpu_limit
+            stop_cpu_limit_service
             ;;
         3)
-            uninstall_cpulimit
+            uninstall_cpu_limit_service
             ;;
         4)
             echo -e "${GREEN}退出程序。${RESET}"
