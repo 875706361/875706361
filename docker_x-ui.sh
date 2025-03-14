@@ -101,7 +101,7 @@ function restart_xui_inside_container() {
 # 显示菜单
 while true; do
     echo -e "${BLUE}========================================${NC}"
-    echo -e "${GREEN}🚀 x-ui 容器管理脚本${NC}"
+    echo -e "${GREEN} x-ui 容器管理脚本${NC}"
     echo -e "${BLUE}========================================${NC}"
     echo -e "${YELLOW}1) 安装容器版 x-ui${NC}"
     echo -e "${RED}2) 删除 x-ui 容器${NC}"
