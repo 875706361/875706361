@@ -156,5 +156,4 @@ main_menu() {
         separator
         read -p "请选择操作 (1-9): " choice
         case $choice in
-           
-::contentReference[oaicite:10]{index=10}
+        
