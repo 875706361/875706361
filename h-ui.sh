@@ -142,6 +142,9 @@ restart_h_ui_in_container() {
 # 主菜单
 main_menu() {
   while true; do
+    # 清除屏幕
+    clear
+
     # 计算终端宽度
     terminal_width=$(tput cols)
     menu_width=30 # 菜单宽度
