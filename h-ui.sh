@@ -87,9 +87,22 @@ install_hui() {
 
   if [ $? -eq 0 ]; then
     echo "${GREEN}h-ui 安装成功！可以通过 http://localhost:${WEB_PORT} 访问。${NC}"
+    reset_password
   else
     echo "${RED}h-ui 安装失败。${NC}"
   fi
+}
+
+# 重置密码
+reset_password() {
+    new_password=$(openssl rand -base64 12)
+    docker exec ${CONTAINER_NAME} ./h-ui reset_password -p ${new_password}
+    if [ $? -eq 0 ]; then
+        echo "${GREEN}密码重置成功，新密码为：${new_password}${NC}"
+    else
+        echo "${RED}密码重置失败${NC}"
+    fi
+
 }
 
 # 进入容器
