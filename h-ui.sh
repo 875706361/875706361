@@ -8,7 +8,7 @@ RESET="\033[0m"
 
 # 默认配置
 CONTAINER_NAME="h-ui"
-IMAGE_NAME="jonssonyan/h-ui:v0.0.11"
+IMAGE_NAME="jonssonyan/h-ui"
 HUI_DIR="/h-ui"
 DEFAULT_WEB_PORT=8081
 
@@ -17,7 +17,7 @@ separator() {
     echo -e "${YELLOW}---------------------------------${RESET}"
 }
 
-# 安装 Docker
+# 安装 Docker（官方推荐方式）
 install_docker() {
     separator
     echo -e "${GREEN}正在检测并安装 Docker...${RESET}"
@@ -45,24 +45,13 @@ reset_h_ui_credentials() {
     sleep 3
 }
 
-# 在容器内部重启 H-UI
-restart_h_ui_inside_container() {
-    separator
-    echo -e "${YELLOW}正在 Docker 内部重启 H-UI...${RESET}"
-
-    docker exec -it $CONTAINER_NAME pkill -f h-ui
-    docker exec -it $CONTAINER_NAME ./h-ui -p $DEFAULT_WEB_PORT &
-
-    echo -e "${GREEN}H-UI 在容器内部重启完成！${RESET}"
-}
-
 # 安装 H-UI
 install_h_ui() {
     install_docker
 
-    read -p "是否拉取最新 H-UI v0.0.11 Docker 镜像？(y/n): " pull_choice
+    read -p "是否拉取最新 H-UI Docker 镜像？(y/n): " pull_choice
     if [[ "$pull_choice" == "y" || "$pull_choice" == "Y" ]]; then
-        echo -e "${YELLOW}拉取 H-UI v0.0.11 镜像中...${RESET}"
+        echo -e "${YELLOW}拉取最新 H-UI 镜像中...${RESET}"
         docker pull $IMAGE_NAME
     fi
 
@@ -88,7 +77,7 @@ install_h_ui() {
     reset_h_ui_credentials  # 自动重置账号密码
 
     if [[ $(docker ps -q -f name=$CONTAINER_NAME) ]]; then
-        echo -e "${GREEN}H-UI v0.0.11 已成功安装并运行！${RESET}"
+        echo -e "${GREEN}H-UI 已成功安装并运行！${RESET}"
         echo -e "Web 访问地址: ${GREEN}http://localhost:$web_port${RESET}"
         echo -e "${YELLOW}H-UI 配置文件路径（宿主机）:${RESET}"
         echo -e "${GREEN}$HUI_DIR/data/config.yaml${RESET}"
@@ -143,29 +132,27 @@ enter_container() {
 main_menu() {
     while true; do
         separator
-        echo -e "${GREEN}H-UI v0.0.11 Docker 管理脚本${RESET}"
+        echo -e "${GREEN}H-UI Docker 管理脚本${RESET}"
         separator
         echo -e "1. 安装/重新安装 H-UI"
         echo -e "2. 重置 H-UI 账号密码"
         echo -e "3. 查看容器状态"
         echo -e "4. 停止 H-UI 容器"
         echo -e "5. 重启 H-UI 容器"
-        echo -e "6. 在 Docker 内部重启 H-UI"
-        echo -e "7. 删除 H-UI 容器及数据"
-        echo -e "8. 进入 H-UI 容器"
-        echo -e "9. 退出"
+        echo -e "6. 删除 H-UI 容器及数据"
+        echo -e "7. 进入 H-UI 容器"
+        echo -e "8. 退出"
         separator
-        read -p "请选择操作 (1-9): " choice
+        read -p "请选择操作 (1-8): " choice
         case $choice in
             1) install_h_ui ;;
             2) reset_h_ui_credentials ;;
             3) status_h_ui ;;
             4) stop_h_ui ;;
             5) restart_h_ui ;;
-            6) restart_h_ui_inside_container ;;
-            7) remove_h_ui ;;
-            8) enter_container ;;
-            9) exit 0 ;;
+            6) remove_h_ui ;;
+            7) enter_container ;;
+            8) exit 0 ;;
             *) echo -e "${RED}无效输入，请重新选择。${RESET}" ;;
         esac
     done
