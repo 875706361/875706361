@@ -13,17 +13,6 @@ IMAGE_NAME="jonssonyan/h-ui:${HUI_VERSION}"
 DEFAULT_USER="sysadmin"
 DEFAULT_PASS="sysadmin"
 
-# 获取终端宽度
-TERM_WIDTH=$(tput cols)
-
-# 居中打印函数
-print_center() {
-    local text="$1"
-    local color="$2"
-    local padding=$(( (TERM_WIDTH - ${#text}) / 2 ))
-    printf "%${padding}s${color}%s${NC}\n" "" "$text"
-}
-
 # 检查 Docker 是否已安装
 check_docker_installed() {
     if ! command -v docker &> /dev/null; then
@@ -57,15 +46,13 @@ install_docker() {
                 sudo systemctl enable docker
                 ;;
             *)
-                echo -e "${RED}不支持的 Linux 发行版，请手动安装 Docker${NC}"
-                echo "您可以尝试运行: bash <(curl -fsSL https://get.docker.com)"
-                exit 1
+                echo -e "${RED}不支持的 Linux 发行版，使用官方安装脚本安装 Docker${NC}"
+                bash <(curl -fsSL https://get.docker.com)
                 ;;
         esac
     else
-        echo -e "${RED}无法检测系统类型，请手动安装 Docker${NC}"
-        echo "您可以尝试运行: bash <(curl -fsSL https://get.docker.com)"
-        exit 1
+        echo -e "${RED}无法检测系统类型，使用官方安装脚本安装 Docker${NC}"
+        bash <(curl -fsSL https://get.docker.com)
     fi
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}Docker 安装成功${NC}"
@@ -75,8 +62,8 @@ install_docker() {
     fi
 }
 
-# 安装 h-ui 容器
-install_hui() {
+# 安装 h-ui 容器（自定义配置）
+install_hui_custom() {
     echo -e "${BLUE}正在拉取 h-ui 镜像: ${IMAGE_NAME}${NC}"
     docker pull "${IMAGE_NAME}"
     
@@ -106,7 +93,21 @@ install_hui() {
     else
         echo -e "${RED}h-ui 安装失败${NC}"
     fi
-    read -p "按 Enter 返回菜单..." # 暂停以便查看结果
+    read -p "按 Enter 返回菜单..."
+    clear
+}
+
+# 官方脚本安装 h-ui 容器（选项 4）
+install_hui_official() {
+    echo -e "${BLUE}正在执行官方安装脚本并选择容器安装 (选项 4)...${NC}"
+    echo "4" | bash <(curl -fsSL https://raw.githubusercontent.com/jonssonyan/h-ui/main/install.sh) "${HUI_VERSION}"
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}h-ui 官方容器安装成功${NC}"
+        show_info_official
+    else
+        echo -e "${RED}h-ui 官方容器安装失败${NC}"
+    fi
+    read -p "按 Enter 返回菜单..."
     clear
 }
 
@@ -145,7 +146,7 @@ enter_hui() {
     clear
 }
 
-# 显示安装信息
+# 显示自定义安装信息
 show_info() {
     echo -e "${YELLOW}===== h-ui 安装信息 ====="
     echo -e "${BLUE}镜像版本:${NC} ${IMAGE_NAME}"
@@ -161,51 +162,70 @@ show_info() {
     clear
 }
 
+# 显示官方安装信息（简化版）
+show_info_official() {
+    echo -e "${YELLOW}===== h-ui 官方安装信息 ====="
+    echo -e "${BLUE}镜像版本:${NC} ${IMAGE_NAME}"
+    echo -e "${BLUE}容器名称:${NC} h-ui"
+    echo -e "${BLUE}默认账号:${NC} ${DEFAULT_USER}"
+    echo -e "${BLUE}默认密码:${NC} ${DEFAULT_PASS}"
+    echo -e "${BLUE}访问地址:${NC} http://your_server_ip:8081 (默认端口)"
+    echo -e "${YELLOW}=========================${NC}"
+    read -p "按 Enter 返回菜单..."
+    clear
+}
+
 # 主菜单
 main_menu() {
     while true; do
         clear
-        print_center "===== h-ui 管理脚本 =====" "${YELLOW}"
-        print_center "1. 安装 h-ui" "${GREEN}"
-        print_center "2. 重启 h-ui" "${GREEN}"
-        print_center "3. 删除 h-ui" "${GREEN}"
-        print_center "4. 进入 h-ui 容器" "${GREEN}"
-        print_center "5. 显示安装信息" "${GREEN}"
-        print_center "6. 退出" "${GREEN}"
-        print_center "=========================" "${YELLOW}"
+        echo -e "${YELLOW}===== h-ui 管理脚本 ====="
+        echo -e "${GREEN}1. 安装 h-ui (自定义配置)${NC}"
+        echo -e "${GREEN}2. 安装 h-ui (官方脚本选项 4)${NC}"
+        echo -e "${GREEN}3. 重启 h-ui${NC}"
+        echo -e "${GREEN}4. 删除 h-ui${NC}"
+        echo -e "${GREEN}5. 进入 h-ui 容器${NC}"
+        echo -e "${GREEN}6. 显示安装信息${NC}"
+        echo -e "${GREEN}7. 退出${NC}"
+        echo -e "${YELLOW}=========================${NC}"
         echo
-        read -p "请选择操作 (1-6): " choice
+        read -p "请选择操作 (1-7): " choice
         
         case $choice in
             1)
                 clear
                 check_docker_installed
-                install_hui
+                install_hui_custom
                 ;;
             2)
                 clear
-                restart_hui
+                check_docker_installed
+                install_hui_official
                 ;;
             3)
                 clear
-                remove_hui
+                restart_hui
                 ;;
             4)
                 clear
-                enter_hui
+                remove_hui
                 ;;
             5)
                 clear
-                show_info
+                enter_hui
                 ;;
             6)
                 clear
-                print_center "退出脚本" "${GREEN}"
+                show_info
+                ;;
+            7)
+                clear
+                echo -e "${GREEN}退出脚本${NC}"
                 exit 0
                 ;;
             *)
                 clear
-                echo -e "${RED}无效选项，请输入 1-6${NC}"
+                echo -e "${RED}无效选项，请输入 1-7${NC}"
                 read -p "按 Enter 返回菜单..."
                 ;;
         esac
