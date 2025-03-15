@@ -1,299 +1,216 @@
 #!/bin/bash
 
-# 获取系统信息
-function get_system_info() {
-    SYSTEM_TYPE=$(grep '^NAME=' /etc/os-release | cut -d '=' -f 2- | sed 's/"//g')
-    VERSION_ID=$(grep '^VERSION_ID=' /etc/os-release | cut -d '=' -f 2- | sed 's/"//g')
-    echo "$SYSTEM_TYPE $VERSION_ID"
+# 定义颜色
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# 定义版本和默认账号密码
+HUI_VERSION="v0.0.11"
+IMAGE_NAME="jonssonyan/h-ui:${HUI_VERSION}"
+DEFAULT_USER="sysadmin"
+DEFAULT_PASS="sysadmin"
+
+# 获取终端宽度
+TERM_WIDTH=$(tput cols)
+
+# 居中打印函数
+print_center() {
+    local text="$1"
+    local color="$2"
+    local padding=$(( (TERM_WIDTH - ${#text}) / 2 ))
+    printf "%${padding}s${color}%s${NC}\n" "" "$text"
 }
 
-# 安装依赖包（根据系统类型）
-function install_dependencies() {
-    local system_type=$1
-    
-    case $system_type in
-        Ubuntu|Debian)
-            sudo apt update && \
-            sudo apt install -y \
-                ca-certificates \
-                curl \
-                gnupg \
-                lsb-release \
-                apt-transport-https \
-                software-properties-common \
-                git \
-                wget \
-                unzip
-            ;;
-            
-        CentOS|RHEL)
-            sudo dnf install -y \
-                dnf-utils \
-                device-mapper-persistent-data \
-                lvm2 \
-                yum-utils \
-                git \
-                wget \
-                unzip
-            ;;
-            
-        Fedora)
-            sudo dnf install -y \
-                dnf-utils \
-                device-mapper-persistent-data \
-                lvm2 \
-                yum-utils \
-                git \
-                wget \
-                unzip
-            ;;
-            
-        Arch\ Linux)
-            sudo pacman -S --noconfirm \
-                base-devel \
-                curl \
-                gnupg \
-                git \
-                wget \
-                unzip
-            ;;
-            
-        openSUSE)
-            sudo zypper refresh && \
-            sudo zypper install -y \
-                ca-certificates \
-                curl \
-                gnupg \
-                git \
-                wget \
-                unzip
-            ;;
-    esac
+# 检查 Docker 是否已安装
+check_docker_installed() {
+    if ! command -v docker &> /dev/null; then
+        echo -e "${RED}Docker 未安装，正在自动安装...${NC}"
+        install_docker
+    else
+        echo -e "${GREEN}Docker 已安装${NC}"
+    fi
 }
 
-# 安装Docker（根据系统类型）
-function install_docker() {
-    local system_type=$1
-    
-    case $system_type in
-        Ubuntu|Debian)
-            # 添加Docker官方GPG密钥
-            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-            
-            # 设置Docker稳定版仓库
-            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-            
-            # 安装Docker引擎、containerd和Docker Compose
-            sudo apt update && \
-            sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-            ;;
-            
-        CentOS|RHEL)
-            # 添加Docker仓库
-            sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-            
-            # 安装Docker引擎、containerd和Docker Compose
-            sudo yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-            ;;
-            
-        Fedora)
-            sudo dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo && \
-            sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-            ;;
-            
-        Arch\ Linux)
-            sudo pacman -S --noconfirm docker docker-compose
-            ;;
-            
-        openSUSE)
-            sudo zypper addrepo https://download.docker.com/linux/opensuse/docker-ce.repo && \
-            sudo zypper refresh && \
-            sudo zypper install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-            ;;
-    esac
-    
-    # 启动Docker服务
-    sudo systemctl enable docker
-    sudo systemctl start docker
-    
-    # 验证Docker安装
-    echo "验证Docker安装..."
-    sudo docker run hello-world
+# 安装 Docker
+install_docker() {
+    echo "检测系统类型并安装 Docker..."
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        case $ID in
+            ubuntu|debian)
+                sudo apt-get update
+                sudo apt-get install -y docker.io
+                sudo systemctl start docker
+                sudo systemctl enable docker
+                ;;
+            centos|rhel|fedora)
+                sudo yum install -y docker
+                sudo systemctl start docker
+                sudo systemctl enable docker
+                ;;
+            arch)
+                sudo pacman -Syu docker
+                sudo systemctl start docker
+                sudo systemctl enable docker
+                ;;
+            *)
+                echo -e "${RED}不支持的 Linux 发行版，请手动安装 Docker${NC}"
+                echo "您可以尝试运行: bash <(curl -fsSL https://get.docker.com)"
+                exit 1
+                ;;
+        esac
+    else
+        echo -e "${RED}无法检测系统类型，请手动安装 Docker${NC}"
+        echo "您可以尝试运行: bash <(curl -fsSL https://get.docker.com)"
+        exit 1
+    fi
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}Docker 安装成功${NC}"
+    else
+        echo -e "${RED}Docker 安装失败，请手动安装${NC}"
+        exit 1
+    fi
 }
 
-# 配置环境
-function configure_environment() {
-    # 添加当前用户到docker组
-    sudo usermod -aG docker $USER
+# 安装 h-ui 容器
+install_hui() {
+    echo -e "${BLUE}正在拉取 h-ui 镜像: ${IMAGE_NAME}${NC}"
+    docker pull "${IMAGE_NAME}"
     
-    # 设置镜像加速器（使用阿里云镜像）
-    sudo mkdir -p /etc/docker
-    sudo tee /etc/docker/daemon.json <<-'EOF'
-{
-  "registry-mirrors": ["https://<your-mirror-host>.mirror.aliyuncs.com"],
-  "data-root": "/var/lib/docker",
-  "log-driver": "json-file",
-  "log-opts": {
-    "max-size": "10m",
-    "max-file": "3"
-  }
-}
-EOF
+    echo -e "${YELLOW}请输入 Web 端口 (默认 8081):${NC}"
+    read -p "端口: " web_port
+    web_port=${web_port:-8081}
     
-    # 重启Docker服务使配置生效
-    sudo systemctl restart docker
-}
-
-# 创建并启动容器
-function create_container() {
-    echo "正在创建并启动容器..."
+    echo -e "${YELLOW}请输入时区 (默认 Asia/Shanghai):${NC}"
+    read -p "时区: " timezone
+    timezone=${timezone:-Asia/Shanghai}
     
-    # 拉取镜像
-    docker pull jonssonyan/h-ui
-    
-    # 创建必要的目录结构
-    sudo mkdir -p /h-ui/bin /h-ui/data /h-ui/export /h-ui/logs
-    
-    # 启动容器，使用高级配置参数
+    echo -e "${BLUE}正在启动 h-ui 容器...${NC}"
     docker run -d --cap-add=NET_ADMIN \
-      --name h-ui --restart always \
-      --network=host \
-      -v /h-ui/bin:/h-ui/bin \
-      -v /h-ui/data:/h-ui/data \
-      -v /h-ui/export:/h-ui/export \
-      -v /h-ui/logs:/h-ui/logs \
-      -e TZ=Asia/Shanghai \
-      jonssonyan/h-ui
-      
-    echo "容器创建完成！"
-    read -n 1 -s -r -p "按任意键继续..."
-}
-
-# 删除容器
-function delete_container() {
-    echo "正在删除容器..."
-    docker rm -f h-ui
-    echo "容器已删除！"
-    read -n 1 -s -r -p "按任意键继续..."
-}
-
-# 重启容器
-function restart_container() {
-    echo "正在重启容器..."
-    docker restart h-ui
-    echo "容器已重启！"
-    read -n 1 -s -r -p "按任意键继续..."
-}
-
-# 进入容器
-function enter_container() {
-    echo "正在进入容器..."
-    docker exec -it h-ui /bin/bash
-}
-
-# 安装H-ui v0.0.11
-function install_hui() {
-    echo "正在安装 H-ui v0.0.11..."
-    docker exec hui-container apt update
-    docker exec hui-container apt install -y git wget unzip
-    docker exec hui-container wget https://github.com/jonssonyan/h-ui/archive/refs/tags/v0.0.11.zip
-    docker exec hui-container unzip v0.0.11.zip
-    echo "H-ui 安装完成！"
-    read -n 1 -s -r -p "按任意键继续..."
-}
-
-# 修改端口
-function modify_port() {
-    echo "正在修改H-ui端口..."
+        --name h-ui --restart always \
+        --network=host \
+        -e TZ="${timezone}" \
+        -v /h-ui/bin:/h-ui/bin \
+        -v /h-ui/data:/h-ui/data \
+        -v /h-ui/export:/h-ui/export \
+        -v /h-ui/logs:/h-ui/logs \
+        "${IMAGE_NAME}" \
+        ./h-ui -p "${web_port}"
     
-    # 停止现有容器
-    docker stop h-ui
-    
-    # 删除现有容器
-    docker rm h-ui
-    
-    # 重新创建容器，使用新的端口
-    read -p "请输入新的端口号 (默认8081): " new_port
-    new_port=${new_port:-8081}
-    
-    # 创建新的容器
-    docker run -d --cap-add=NET_ADMIN \
-      --name h-ui --restart always \
-      --network=host \
-      -v /h-ui/bin:/h-ui/bin \
-      -v /h-ui/data:/h-ui/data \
-      -v /h-ui/export:/h-ui/export \
-      -v /h-ui/logs:/h-ui/logs \
-      -e TZ=Asia/Shanghai \
-      -e PORT=$new_port \
-      jonssonyan/h-ui
-      
-    echo "端口已修改为 $new_port！"
-    read -n 1 -s -r -p "按任意键继续..."
-}
-
-# 显示主菜单
-function show_menu() {
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}h-ui 安装成功${NC}"
+        show_info
+    else
+        echo -e "${RED}h-ui 安装失败${NC}"
+    fi
+    read -p "按 Enter 返回菜单..." # 暂停以便查看结果
     clear
-    echo "================== Docker与H-ui集成管理系统 =================="
-    echo "1. 安装Docker及依赖包"
-    echo "2. 配置Docker环境"
-    echo "3. 创建并启动容器"
-    echo "4. 删除容器"
-    echo "5. 重启容器"
-    echo "6. 进入容器"
-    echo "7. 安装 H-ui v0.0.11"
-    echo "8. 修改端口"
-    echo "9. 退出"
-    echo "============================================================"
 }
 
-# 主程序
-echo "开始执行Docker和H-ui集成脚本..."
+# 重启 h-ui 容器
+restart_hui() {
+    echo -e "${BLUE}正在重启 h-ui 容器...${NC}"
+    docker restart h-ui
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}h-ui 重启成功${NC}"
+    else
+        echo -e "${RED}h-ui 重启失败，可能是容器未运行${NC}"
+    fi
+    read -p "按 Enter 返回菜单..."
+    clear
+}
 
-# 获取系统信息
-SYSTEM_INFO=$(get_system_info)
-SYSTEM_TYPE=$(echo "$SYSTEM_INFO" | cut -d ' ' -f 1)
+# 删除 h-ui 容器
+remove_hui() {
+    echo -e "${BLUE}正在删除 h-ui 容器和相关数据...${NC}"
+    docker rm -f h-ui
+    docker rmi "${IMAGE_NAME}"
+    rm -rf /h-ui
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}h-ui 删除成功${NC}"
+    else
+        echo -e "${RED}h-ui 删除失败${NC}"
+    fi
+    read -p "按 Enter 返回菜单..."
+    clear
+}
 
-# 安装依赖包
-install_dependencies "$SYSTEM_TYPE"
+# 进入 h-ui 容器
+enter_hui() {
+    echo -e "${BLUE}正在进入 h-ui 容器...${NC}"
+    docker exec -it h-ui /bin/sh
+    clear
+}
 
-# 安装Docker
-install_docker "$SYSTEM_TYPE"
+# 显示安装信息
+show_info() {
+    echo -e "${YELLOW}===== h-ui 安装信息 ====="
+    echo -e "${BLUE}镜像版本:${NC} ${IMAGE_NAME}"
+    echo -e "${BLUE}容器名称:${NC} h-ui"
+    echo -e "${BLUE}Web 端口:${NC} $(docker inspect h-ui | grep -i '"-p"' | awk '{print $2}' | cut -d' ' -f2)"
+    echo -e "${BLUE}时区:${NC} $(docker inspect h-ui | grep -i 'TZ=' | cut -d'=' -f2 | tr -d '"')"
+    echo -e "${BLUE}数据目录:${NC} /h-ui"
+    echo -e "${BLUE}默认账号:${NC} ${DEFAULT_USER}"
+    echo -e "${BLUE}默认密码:${NC} ${DEFAULT_PASS}"
+    echo -e "${BLUE}访问地址:${NC} http://your_server_ip:$(docker inspect h-ui | grep -i '"-p"' | awk '{print $2}' | cut -d' ' -f2)"
+    echo -e "${YELLOW}=========================${NC}"
+    read -p "按 Enter 返回菜单..."
+    clear
+}
 
-# 配置环境
-configure_environment
+# 主菜单
+main_menu() {
+    while true; do
+        clear
+        print_center "===== h-ui 管理脚本 =====" "${YELLOW}"
+        print_center "1. 安装 h-ui" "${GREEN}"
+        print_center "2. 重启 h-ui" "${GREEN}"
+        print_center "3. 删除 h-ui" "${GREEN}"
+        print_center "4. 进入 h-ui 容器" "${GREEN}"
+        print_center "5. 显示安装信息" "${GREEN}"
+        print_center "6. 退出" "${GREEN}"
+        print_center "=========================" "${YELLOW}"
+        echo
+        read -p "请选择操作 (1-6): " choice
+        
+        case $choice in
+            1)
+                clear
+                check_docker_installed
+                install_hui
+                ;;
+            2)
+                clear
+                restart_hui
+                ;;
+            3)
+                clear
+                remove_hui
+                ;;
+            4)
+                clear
+                enter_hui
+                ;;
+            5)
+                clear
+                show_info
+                ;;
+            6)
+                clear
+                print_center "退出脚本" "${GREEN}"
+                exit 0
+                ;;
+            *)
+                clear
+                echo -e "${RED}无效选项，请输入 1-6${NC}"
+                read -p "按 Enter 返回菜单..."
+                ;;
+        esac
+    done
+}
 
-# 显示完成信息
-echo "================== 安装完成！ =================="
-echo "请重新登录系统以应用新的Docker权限设置。"
-echo "您可以通过以下命令测试Docker是否正常工作："
-echo "sudo docker ps"
-echo "==============================================="
-
-# 显示H-ui默认账号密码信息
-echo "================== H-ui默认账号信息 =================="
-echo "默认用户名：sysadmin"
-echo "默认密码：sysadmin"
-echo "默认访问端口：8081"
-echo "==============================================="
-
-# 进入主菜单循环
-while true
-do
-    show_menu
-    read -p "请选择操作 (1-9): " choice
-    
-    case $choice in
-        1) install_docker "$SYSTEM_TYPE" ;;
-        2) configure_environment ;;
-        3) create_container ;;
-        4) delete_container ;;
-        5) restart_container ;;
-        6) enter_container ;;
-        7) install_hui ;;
-        8) modify_port ;;
-        9) exit 0 ;;
-        *) echo "无效选项，请重新选择..." ;;
-    esac
-done
+# 执行主菜单
+main_menu
