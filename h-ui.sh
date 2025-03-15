@@ -4,81 +4,59 @@
 GREEN="\033[32m"
 YELLOW="\033[33m"
 RED="\033[31m"
-BLUE="\033[34m"
 RESET="\033[0m"
-BOLD="\033[1m"
 
 # 默认配置
 CONTAINER_NAME="h-ui"
-IMAGE_NAME="jonssonyan/h-ui:v0.0.11"
 HUI_DIR="/h-ui"
 DEFAULT_WEB_PORT=8081
 
 # 分隔线
 separator() {
-    echo -e "${YELLOW}-----------------------------------------------${RESET}"
+    echo -e "${YELLOW}---------------------------------${RESET}"
 }
 
-# 检查 Docker 版本
-check_docker_version() {
-    separator
-    echo -e "${GREEN}正在检测 Docker 版本...${RESET}"
-    if ! command -v docker &>/dev/null; then
-        echo -e "${RED}Docker 未安装，请先安装 Docker！${RESET}"
-        exit 1
-    fi
-    DOCKER_VERSION=$(docker --version | awk -F' ' '{print $3}' | tr -d ',')
-    REQUIRED_VERSION="20.10.0"
-    if [ "$(printf '%s\n' "$REQUIRED_VERSION" "$DOCKER_VERSION" | sort -V | head -n1)" != "$REQUIRED_VERSION" ]; then
-        echo -e "${RED}Docker 版本过低，请升级至 $REQUIRED_VERSION 或更新版本！${RESET}"
-        exit 1
-    fi
-    echo -e "${GREEN}Docker 版本符合要求: $DOCKER_VERSION${RESET}"
-}
-
-# 安装 Docker
+# 安装 Docker（官方推荐方式）
 install_docker() {
-    check_docker_version
-    echo -e "${GREEN}Docker 已安装，继续执行操作。${RESET}"
-}
-
-# 重置 H-UI 账号密码
-reset_h_ui_credentials() {
     separator
-    echo -e "${YELLOW}正在重置 H-UI 账号密码...${RESET}"
-    docker exec -it $CONTAINER_NAME ./h-ui reset
-    sleep 3
+    echo -e "${GREEN}正在检测并安装 Docker...${RESET}"
+    
+    if command -v docker &> /dev/null; then
+        DOCKER_VERSION=$(docker --version | awk '{print $3}' | sed 's/,//')
+        REQUIRED_VERSION="20.10.0"
+        if [[ "$(echo -e "$DOCKER_VERSION\n$REQUIRED_VERSION" | sort -V | head -n1)" == "$REQUIRED_VERSION" ]]; then
+            echo -e "${GREEN}Docker 已安装，版本: $DOCKER_VERSION${RESET}"
+            return
+        else
+            echo -e "${RED}Docker 版本过低，建议更新！${RESET}"
+        fi
+    fi
+
+    bash <(curl -fsSL https://get.docker.com)
+    sudo systemctl enable docker
+    sudo systemctl start docker
+    echo -e "${GREEN}Docker 安装完成！${RESET}"
 }
 
-# 安装 H-UI
+# 安装 H-UI（官方安装脚本）
 install_h_ui() {
     install_docker
-    separator
-    echo -e "${YELLOW}拉取指定版本 H-UI 镜像: $IMAGE_NAME${RESET}"
-    docker pull $IMAGE_NAME
+    
     mkdir -p $HUI_DIR/{bin,data,export,logs}
-
+    
     read -p "请输入 H-UI Web 端口 (默认: $DEFAULT_WEB_PORT): " web_port
     web_port=${web_port:-$DEFAULT_WEB_PORT}
-
+    
     echo -e "${YELLOW}默认时区为 Asia/Shanghai...${RESET}"
-
-    echo -e "${YELLOW}启动 H-UI 容器中...${RESET}"
-    docker run -d --cap-add=NET_ADMIN \
-      --name $CONTAINER_NAME --restart always \
-      --network=host \
-      -e TZ=Asia/Shanghai \
-      -v $HUI_DIR/bin:/h-ui/bin \
-      -v $HUI_DIR/data:/h-ui/data \
-      -v $HUI_DIR/export:/h-ui/export \
-      -v $HUI_DIR/logs:/h-ui/logs \
-      $IMAGE_NAME ./h-ui -p $web_port
-
+    
+    echo -e "${YELLOW}使用官方脚本安装 H-UI...${RESET}"
+    bash <(curl -fsSL https://raw.githubusercontent.com/jonssonyan/h-ui/main/install.sh) v0.0.11
+    
     sleep 5
-    reset_h_ui_credentials
-
+    reset_h_ui_credentials  # 自动重置账号密码
+    
     if [[ $(docker ps -q -f name=$CONTAINER_NAME) ]]; then
-        echo -e "${GREEN}H-UI v0.0.11 已成功安装并运行！${RESET}"
+        echo -e "${GREEN}H-UI 已成功安装并运行！${RESET}"
         echo -e "Web 访问地址: ${GREEN}http://localhost:$web_port${RESET}"
         echo -e "${YELLOW}H-UI 配置文件路径（宿主机）:${RESET}"
         echo -e "${GREEN}$HUI_DIR/data/config.yaml${RESET}"
