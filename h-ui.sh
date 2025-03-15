@@ -62,41 +62,6 @@ install_docker() {
     fi
 }
 
-# 安装 h-ui 容器（自定义配置）
-install_hui_custom() {
-    echo -e "${BLUE}正在拉取 h-ui 镜像: ${IMAGE_NAME}${NC}"
-    docker pull "${IMAGE_NAME}"
-    
-    echo -e "${YELLOW}请输入 Web 端口 (默认 8081):${NC}"
-    read -p "端口: " web_port
-    web_port=${web_port:-8081}
-    
-    echo -e "${YELLOW}请输入时区 (默认 Asia/Shanghai):${NC}"
-    read -p "时区: " timezone
-    timezone=${timezone:-Asia/Shanghai}
-    
-    echo -e "${BLUE}正在启动 h-ui 容器...${NC}"
-    docker run -d --cap-add=NET_ADMIN \
-        --name h-ui --restart always \
-        --network=host \
-        -e TZ="${timezone}" \
-        -v /h-ui/bin:/h-ui/bin \
-        -v /h-ui/data:/h-ui/data \
-        -v /h-ui/export:/h-ui/export \
-        -v /h-ui/logs:/h-ui/logs \
-        "${IMAGE_NAME}" \
-        ./h-ui -p "${web_port}"
-    
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}h-ui 安装成功${NC}"
-        show_info
-    else
-        echo -e "${RED}h-ui 安装失败${NC}"
-    fi
-    read -p "按 Enter 返回菜单..."
-    clear
-}
-
 # 官方脚本安装 h-ui 容器（选项 4）
 install_hui_official() {
     echo -e "${BLUE}正在执行官方安装脚本并选择容器安装 (选项 4)...${NC}"
@@ -108,7 +73,6 @@ install_hui_official() {
         echo -e "${RED}h-ui 官方容器安装失败${NC}"
     fi
     read -p "按 Enter 返回菜单..."
-    clear
 }
 
 # 重启 h-ui 容器
@@ -121,7 +85,6 @@ restart_hui() {
         echo -e "${RED}h-ui 重启失败，可能是容器未运行${NC}"
     fi
     read -p "按 Enter 返回菜单..."
-    clear
 }
 
 # 删除 h-ui 容器
@@ -136,96 +99,66 @@ remove_hui() {
         echo -e "${RED}h-ui 删除失败${NC}"
     fi
     read -p "按 Enter 返回菜单..."
-    clear
 }
 
 # 进入 h-ui 容器
 enter_hui() {
     echo -e "${BLUE}正在进入 h-ui 容器...${NC}"
     docker exec -it h-ui /bin/sh
-    clear
 }
 
-# 显示自定义安装信息
-show_info() {
-    echo -e "${YELLOW}===== h-ui 安装信息 ====="
-    echo -e "${BLUE}镜像版本:${NC} ${IMAGE_NAME}"
-    echo -e "${BLUE}容器名称:${NC} h-ui"
-    echo -e "${BLUE}Web 端口:${NC} $(docker inspect h-ui | grep -i '"-p"' | awk '{print $2}' | cut -d' ' -f2)"
-    echo -e "${BLUE}时区:${NC} $(docker inspect h-ui | grep -i 'TZ=' | cut -d'=' -f2 | tr -d '"')"
-    echo -e "${BLUE}数据目录:${NC} /h-ui"
-    echo -e "${BLUE}默认账号:${NC} ${DEFAULT_USER}"
-    echo -e "${BLUE}默认密码:${NC} ${DEFAULT_PASS}"
-    echo -e "${BLUE}访问地址:${NC} http://your_server_ip:$(docker inspect h-ui | grep -i '"-p"' | awk '{print $2}' | cut -d' ' -f2)"
-    echo -e "${YELLOW}=========================${NC}"
-    read -p "按 Enter 返回菜单..."
-    clear
-}
-
-# 显示官方安装信息（简化版）
+# 显示官方安装信息
 show_info_official() {
     echo -e "${YELLOW}===== h-ui 官方安装信息 ====="
     echo -e "${BLUE}镜像版本:${NC} ${IMAGE_NAME}"
     echo -e "${BLUE}容器名称:${NC} h-ui"
+    echo -e "${BLUE}Web 端口:${NC} $(docker inspect h-ui 2>/dev/null | grep -i '"-p"' | awk '{print $2}' | cut -d' ' -f2 || echo '8081 (默认)')"
+    echo -e "${BLUE}时区:${NC} $(docker inspect h-ui 2>/dev/null | grep -i 'TZ=' | cut -d'=' -f2 | tr -d '"' || echo 'Asia/Shanghai (默认)')"
+    echo -e "${BLUE}数据目录:${NC} /h-ui"
     echo -e "${BLUE}默认账号:${NC} ${DEFAULT_USER}"
     echo -e "${BLUE}默认密码:${NC} ${DEFAULT_PASS}"
-    echo -e "${BLUE}访问地址:${NC} http://your_server_ip:8081 (默认端口)"
+    echo -e "${BLUE}访问地址:${NC} http://your_server_ip:$(docker inspect h-ui 2>/dev/null | grep -i '"-p"' | awk '{print $2}' | cut -d' ' -f2 || echo '8081')"
     echo -e "${YELLOW}=========================${NC}"
     read -p "按 Enter 返回菜单..."
-    clear
 }
 
 # 主菜单
 main_menu() {
     while true; do
-        clear
         echo -e "${YELLOW}===== h-ui 管理脚本 ====="
-        echo -e "${GREEN}1. 安装 h-ui (自定义配置)${NC}"
-        echo -e "${GREEN}2. 安装 h-ui (官方脚本选项 4)${NC}"
-        echo -e "${GREEN}3. 重启 h-ui${NC}"
-        echo -e "${GREEN}4. 删除 h-ui${NC}"
-        echo -e "${GREEN}5. 进入 h-ui 容器${NC}"
-        echo -e "${GREEN}6. 显示安装信息${NC}"
-        echo -e "${GREEN}7. 退出${NC}"
+        echo -e "${GREEN}1. 安装 h-ui (官方脚本选项 4)${NC}"
+        echo -e "${GREEN}2. 重启 h-ui${NC}"
+        echo -e "${GREEN}3. 删除 h-ui${NC}"
+        echo -e "${GREEN}4. 进入 h-ui 容器${NC}"
+        echo -e "${GREEN}5. 显示安装信息${NC}"
+        echo -e "${GREEN}6. 退出${NC}"
         echo -e "${YELLOW}=========================${NC}"
         echo
-        read -p "请选择操作 (1-7): " choice
+        read -p "请选择操作 (1-6): " choice
         
         case $choice in
             1)
-                clear
-                check_docker_installed
-                install_hui_custom
-                ;;
-            2)
-                clear
                 check_docker_installed
                 install_hui_official
                 ;;
-            3)
-                clear
+            2)
                 restart_hui
                 ;;
-            4)
-                clear
+            3)
                 remove_hui
                 ;;
-            5)
-                clear
+            4)
                 enter_hui
                 ;;
-            6)
-                clear
-                show_info
+            5)
+                show_info_official
                 ;;
-            7)
-                clear
+            6)
                 echo -e "${GREEN}退出脚本${NC}"
                 exit 0
                 ;;
             *)
-                clear
-                echo -e "${RED}无效选项，请输入 1-7${NC}"
+                echo -e "${RED}无效选项，请输入 1-6${NC}"
                 read -p "按 Enter 返回菜单..."
                 ;;
         esac
