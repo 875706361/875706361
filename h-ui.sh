@@ -153,9 +153,9 @@ main_menu() {
     # 输出菜单
     echo ""
     printf "%${padding}s %s\n" "" "------------------------"
-    printf "%${padding}s %s\n" "" "${GREEN}h-ui 管理脚本${NC}"
+    printf "%${padding}s %s\n" "" "docker_h-ui 管理脚本"
     printf "%${padding}s %s\n" "" "------------------------"
-    printf "%${padding}s %s\n" "" "1. 安装 h-ui"
+    printf "%${padding}s %s\n" "" "1. 安装 docker_h-ui"
     printf "%${padding}s %s\n" "" "2. 进入 h-ui 容器"
     printf "%${padding}s %s\n" "" "3. 删除 h-ui 容器"
     printf "%${padding}s %s\n" "" "4. 重启 h-ui 容器"
