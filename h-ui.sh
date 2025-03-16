@@ -31,17 +31,18 @@ install_docker() {
         case $ID in
             ubuntu|debian)
                 sudo apt-get update
-                sudo apt-get install -y docker.io
+bash <(curl -fsSL https://get.docker.com)
                 sudo systemctl start docker
                 sudo systemctl enable docker
                 ;;
             centos|rhel|fedora)
-                sudo yum install -y docker
+yum update -y
+bash <(curl -fsSL https://get.docker.com)
                 sudo systemctl start docker
                 sudo systemctl enable docker
                 ;;
             arch)
-                sudo pacman -Syu docker
+                bash <(curl -fsSL https://get.docker.com)
                 sudo systemctl start docker
                 sudo systemctl enable docker
                 ;;
