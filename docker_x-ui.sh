@@ -129,6 +129,12 @@ remove_xui() {
     fi
 }
 
+# 进入容器
+enter_xui() {
+    echo -e "${BLUE}正在进入 x-ui 容器...${NC}"
+    docker exec -it x-ui /bin/sh
+}
+
 # 显示安装信息
 show_info() {
     echo -e "${GREEN}====================================${NC}"
@@ -152,7 +158,8 @@ show_menu() {
     echo -e "2. 查看运行状态"
     echo -e "3. 重启 x-ui"
     echo -e "4. 删除 x-ui"
-    echo -e "5. 退出"
+    echo -e "5. 进入 x-ui"
+    echo -e "6. 退出"
     echo -e "${GREEN}====================================${NC}"
     read -p "请选择操作 [1-5]: " choice
 }
@@ -183,6 +190,9 @@ main() {
                 read -p "按回车键返回菜单..."
                 ;;
             5)
+                enter_xui
+                ;;
+            6)
                 echo -e "${GREEN}感谢使用，再见！${NC}"
                 exit 0
                 ;;
