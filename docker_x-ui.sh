@@ -18,15 +18,15 @@ fi
 install_dependencies() {
     echo -e "${BLUE}正在安装必要依赖...${NC}"
     if command -v apt >/dev/null 2>&1; then
-        apt update && apt install -y curl wget
+        apt update && apt install -y curl
     elif command -v yum >/dev/null 2>&1; then
-        yum install -y curl wget
+        yum install -y curl
     elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y curl wget
+        dnf install -y curl
     elif command -v pacman >/dev/null 2>&1; then
-        pacman -Sy curl wget
+        pacman -Sy curl
     else
-        echo -e "${RED}无法识别的包管理器，请手动安装 curl 和 wget${NC}"
+        echo -e "${RED}无法识别的包管理器，请手动安装 curl${NC}"
         exit 1
     fi
 }
@@ -44,31 +44,31 @@ install_docker() {
     fi
 }
 
-# 检查 Docker Compose
-check_docker_compose() {
-    if ! command -v docker-compose >/dev/null 2>&1; then
-        echo -e "${BLUE}正在安装 Docker Compose...${NC}"
-        curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-        chmod +x /usr/local/bin/docker-compose
-        echo -e "${GREEN}Docker Compose 安装完成！${NC}"
-    fi
-}
-
 # 安装 x-ui
 install_xui() {
     echo -e "${BLUE}正在安装 x-ui...${NC}"
+    
+    # 检查是否已存在 x-ui 容器
+    if docker ps -a --filter "name=x-ui" | grep -q "x-ui"; then
+        echo -e "${YELLOW}检测到已存在的 x-ui 容器，正在清理...${NC}"
+        docker stop x-ui 2>/dev/null
+        docker rm x-ui 2>/dev/null
+    fi
+    
+    # 创建目录并安装
     mkdir -p x-ui && cd x-ui
-            docker run -itd --network=host \
-                -v $PWD/db/:/etc/x-ui/ \
-                -v $PWD/cert/:/root/cert/ \
-                --name x-ui --restart=unless-stopped \
-                enwaiax/x-ui:alpha-zh
+    docker run -itd --network=host \
+        -v $PWD/db/:/etc/x-ui/ \
+        -v $PWD/cert/:/root/cert/ \
+        --name x-ui --restart=unless-stopped \
+        enwaiax/x-ui:alpha-zh
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}x-ui 安装成功！${NC}"
         show_info
     else
-        echo -e "${RED}x-ui 安装失败！${NC}"
+        echo -e "${RED}x-ui 安装失败！请检查网络或 Docker 服务${NC}"
+        cd .. && rm -rf x-ui
     fi
     cd ..
 }
@@ -103,8 +103,6 @@ remove_xui() {
     if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
         docker stop x-ui 2>/dev/null
         docker rm x-ui 2>/dev/null
-        cd x-ui 2>/dev/null && docker-compose down 2>/dev/null
-        cd ..
         rm -rf x-ui
         echo -e "${GREEN}x-ui 已删除！${NC}"
     else
@@ -136,7 +134,6 @@ main_menu() {
             1)
                 install_dependencies
                 install_docker
-                check_docker_compose
                 install_xui
                 read -p "按 Enter 键继续..."
                 ;;
