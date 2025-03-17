@@ -58,29 +58,11 @@ check_docker_compose() {
 install_xui() {
     echo -e "${BLUE}正在安装 x-ui...${NC}"
     mkdir -p x-ui && cd x-ui
-    echo -e "${YELLOW}选择安装方式:${NC}"
-    echo "1) 使用 docker run"
-    echo "2) 使用 docker-compose"
-    read -p "请输入选择 (1-2): " install_choice
-    
-    case $install_choice in
-        1)
             docker run -itd --network=host \
                 -v $PWD/db/:/etc/x-ui/ \
                 -v $PWD/cert/:/root/cert/ \
                 --name x-ui --restart=unless-stopped \
                 enwaiax/x-ui:alpha-zh
-            ;;
-        2)
-            wget -q https://raw.githubusercontent.com/chasing66/x-ui/main/docker-compose.yml
-            docker-compose up -d
-            ;;
-        *)
-            echo -e "${RED}无效选择！${NC}"
-            cd .. && rmdir x-ui
-            return 1
-            ;;
-    esac
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}x-ui 安装成功！${NC}"
