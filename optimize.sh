@@ -9,7 +9,7 @@ NC='\033[0m' # 无颜色
 
 # 检查是否以 root 权限运行
 if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}请以 root 权限运行此脚本 (sudo)${NC}"
+    echo -e "${RED}请以 roo (sudo)${NC}"
     exit 1
 fi
 
