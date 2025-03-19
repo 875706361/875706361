@@ -22,6 +22,70 @@ BACKUP_FILE="/etc/optimizer_backup"
 SYSCTL_CONF="/etc/sysctl.d/99-optimizer.conf"
 SERVICE_FILE="/etc/systemd/system/cpu-optimizer.service"
 
+# 检查内核是否支持 CPU 频率管理
+check_kernel_cpufreq_support() {
+    local support="yes"
+    # 检查是否加载了频率管理模块
+    if ! lsmod | grep -q -E "intel_pstate|acpi-cpufreq|amd_freq_sensitivity"; then
+        modprobe intel_pstate 2>/dev/null || modprobe acpi-cpufreq 2>/dev/null || modprobe amd_freq_sensitivity 2>/dev/null
+        if ! lsmod | grep -q -E "intel_pstate|acpi-cpufreq|amd_freq_sensitivity"; then
+            support="no"
+        fi
+    fi
+    # 检查 cpufreq 目录是否存在
+    if [ ! -d /sys/devices/system/cpu/cpu0/cpufreq ]; then
+        support="no"
+    fi
+    echo $support
+}
+
+# 升级内核以支持 CPU 频率管理
+upgrade_kernel() {
+    echo -e "${YELLOW}当前内核不支持 CPU 频率管理，正在升级内核...${NC}"
+    log "开始升级内核以支持 CPU 频率管理"
+
+    case $PKG_MANAGER in
+        "yum")
+            # CentOS 7: 使用 ELRepo 仓库升级内核
+            echo -e "${BLUE}导入 ELRepo GPG 密钥和仓库...${NC}"
+            rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org 2>/dev/null
+            yum install -y https://www.elrepo.org/elrepo-release-7.el7.elrepo.noarch.rpm || { echo -e "${RED}添加 ELRepo 仓库失败${NC}"; log "添加 ELRepo 仓库失败"; exit 1; }
+            echo -e "${BLUE}安装最新主线内核...${NC}"
+            yum --enablerepo=elrepo-kernel install -y kernel-ml || { echo -e "${RED}安装新内核失败${NC}"; log "安装新内核失败"; exit 1; }
+            # 设置默认启动内核
+            grub2-set-default 0
+            echo -e "${GREEN}内核升级完成，请重启系统以应用新内核${NC}"
+            log "CentOS 内核升级完成"
+            NEED_REBOOT="yes"
+            ;;
+        "dnf")
+            # CentOS 8+: 使用 ELRepo 升级内核
+            echo -e "${BLUE}导入 ELRepo GPG 密钥和仓库...${NC}"
+            rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org 2>/dev/null
+            dnf install -y https://www.elrepo.org/elrepo-release-8.el8.elrepo.noarch.rpm || { echo -e "${RED}添加 ELRepo 仓库失败${NC}"; log "添加 ELRepo 仓库失败"; exit 1; }
+            echo -e "${BLUE}安装最新主线内核...${NC}"
+            dnf --enablerepo=elrepo-kernel install -y kernel-ml || { echo -e "${RED}安装新内核失败${NC}"; log "安装新内核失败"; exit 1; }
+            grub2-set-default 0
+            echo -e "${GREEN}内核升级完成，请重启系统以应用新内核${NC}"
+            log "CentOS 8+ 内核升级完成"
+            NEED_REBOOT="yes"
+            ;;
+        "apt-get")
+            # Ubuntu: 安装 HWE 内核
+            echo -e "${BLUE}安装 Ubuntu HWE 内核...${NC}"
+            $INSTALL_CMD linux-generic-hwe-$(lsb_release -sr) || { echo -e "${RED}安装 HWE 内核失败${NC}"; log "安装 HWE 内核失败"; exit 1; }
+            echo -e "${GREEN}内核升级完成，请重启系统以应用新内核${NC}"
+            log "Ubuntu 内核升级完成"
+            NEED_REBOOT="yes"
+            ;;
+        *)
+            echo -e "${RED}不支持的包管理器，无法自动升级内核${NC}"
+            log "不支持的包管理器，无法升级内核"
+            exit 1
+            ;;
+    esac
+}
+
 # 检测发行版并安装依赖
 install_dependencies() {
     echo -e "${YELLOW}检测并安装所需依赖...${NC}"
@@ -54,24 +118,48 @@ install_dependencies() {
     $UPDATE_CMD || { echo -e "${RED}更新包索引失败${NC}"; log "更新包索引失败"; exit 1; }
 
     # 安装必要工具
-    for pkg in procps systemd; do
-        if ! command -v ps >/dev/null 2>&1 || ! command -v systemctl >/dev/null 2>&1; then
+    for pkg in procps systemd grub2-tools; do
+        if ! command -v ps >/dev/null 2>&1 || ! command -v systemctl >/dev/null 2>&1 || ! command -v grub2-mkconfig >/dev/null 2>&1; then
             echo -e "${BLUE}安装 $pkg...${NC}"
             $INSTALL_CMD $pkg || { echo -e "${RED}安装 $pkg 失败${NC}"; log "安装 $pkg 失败"; exit 1; }
         fi
     done
 
-    # 安装 CPU 频率管理工具
-    if [ -d /sys/devices/system/cpu ] && ! command -v cpufreq-info >/dev/null 2>&1 && ! command -v cpupower >/dev/null 2>&1; then
-        echo -e "${BLUE}安装 CPU 频率管理工具...${NC}"
-        case $PKG_MANAGER in
-            "apt-get") $INSTALL_CMD cpufrequtils && CPU_TOOL="cpufrequtils" ;;
-            "yum"|"dnf") $INSTALL_CMD cpupower || $INSTALL_CMD cpufreq-utils && CPU_TOOL="cpupower 或 cpufreq-utils" ;;
-        esac
-        # 加载 CPU 频率模块
-        modprobe acpi-cpufreq 2>/dev/null || modprobe intel_pstate 2>/dev/null
+    # 检查并安装 CPU 频率管理工具
+    if [ -d /sys/devices/system/cpu ]; then
+        echo -e "${BLUE}检查并安装 CPU 频率管理工具...${NC}"
+        if ! command -v cpufreq-info >/dev/null 2>&1 && ! command -v cpupower >/dev/null 2>&1; then
+            case $PKG_MANAGER in
+                "apt-get") $INSTALL_CMD cpufrequtils && CPU_TOOL="cpufrequtils" ;;
+                "yum"|"dnf") $INSTALL_CMD cpupower || $INSTALL_CMD cpufreq-utils && CPU_TOOL="cpupower 或 cpufreq-utils" ;;
+            esac
+        else
+            CPU_TOOL="已安装"
+        fi
+
+        # 检查内核支持并升级
+        if [ "$(check_kernel_cpufreq_support)" = "no" ]; then
+            upgrade_kernel
+        else
+            # 加载 CPU 频率模块
+            echo -e "${BLUE}加载 CPU 频率模块...${NC}"
+            for module in intel_pstate acpi-cpufreq amd_freq_sensitivity; do
+                if modprobe $module 2>/dev/null; then
+                    echo -e "${GREEN}成功加载模块: $module${NC}"
+                    log "加载 CPU 频率模块: $module"
+                fi
+            done
+            # 持久化模块加载
+            for module in intel_pstate acpi-cpufreq amd_freq_sensitivity; do
+                if lsmod | grep -q $module; then
+                    echo $module >> /etc/modules-load.d/cpufreq.conf 2>/dev/null || echo $module >> /etc/modules
+                fi
+            done
+        fi
     else
-        CPU_TOOL="已安装或无需安装"
+        echo -e "${YELLOW}未检测到 CPU 控制目录，可能为虚拟化环境${NC}"
+        log "未检测到 CPU 控制目录"
+        CPU_TOOL="无需安装"
     fi
 
     # 检查并启用 TCP BBR
@@ -99,6 +187,7 @@ install_dependencies() {
     echo -e "  当前内核版本: $(uname -r)"
     echo -e "  CPU 核心数: $(nproc)"
     echo -e "  TCP BBR 状态: $BBR_STATUS"
+    [ "$NEED_REBOOT" = "yes" ] && echo -e "${RED}请重启系统以应用新内核！${NC}"
 }
 
 # 检查参数状态的辅助函数
@@ -113,12 +202,25 @@ check_optimizations() {
     echo -e "${YELLOW}当前系统优化状态：${NC}"
     echo -e "${BLUE}----------------${NC}"
 
-    # 检查 CPU 配置
-    if [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor ]; then
-        CURRENT_GOVERNOR=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "不可用")
-        [ "$CURRENT_GOVERNOR" = "performance" ] && echo -e "${GREEN}CPU 频率管理模式: $CURRENT_GOVERNOR (已优化)${NC}" || echo -e "${RED}CPU 频率管理模式: $CURRENT_GOVERNOR (未优化)${NC}"
+    # 检查 CPU 配置并诊断原因
+    if [ -d /sys/devices/system/cpu ]; then
+        GOVERNOR_FILES=$(ls /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null)
+        if [ -n "$GOVERNOR_FILES" ]; then
+            CURRENT_GOVERNOR=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "不可用")
+            [ "$CURRENT_GOVERNOR" = "performance" ] && echo -e "${GREEN}CPU 频率管理模式: $CURRENT_GOVERNOR (已优化)${NC}" || echo -e "${RED}CPU 频率管理模式: $CURRENT_GOVERNOR (未优化)${NC}"
+        else
+            echo -e "${YELLOW}CPU 频率管理模式: 不可用${NC}"
+            echo -e "${BLUE}诊断:${NC}"
+            if lsmod | grep -q -E "intel_pstate|acpi-cpufreq|amd_freq_sensitivity"; then
+                echo -e "  - CPU 频率模块已加载，但 governor 文件不可用，可能为虚拟化限制"
+            else
+                echo -e "  - 未加载 CPU 频率模块，已尝试升级内核"
+            fi
+            log "CPU 频率管理模式不可用"
+        fi
     else
-        echo -e "${YELLOW}CPU 频率管理模式: 不可用${NC}"
+        echo -e "${YELLOW}CPU 频率管理模式: 不可用 (未检测到 CPU 控制目录)${NC}"
+        log "未检测到 CPU 控制目录"
     fi
 
     # 检查系统参数
@@ -193,15 +295,14 @@ EOF
 
     # 设置 CPU 频率管理为 performance
     if [ -d /sys/devices/system/cpu ]; then
-        echo -e "${BLUE}设置 CPU 频率管理模式为 performance${NC}"
         GOVERNOR_FILES=$(ls /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null)
         if [ -n "$GOVERNOR_FILES" ]; then
+            echo -e "${BLUE}设置 CPU 频率管理模式为 performance${NC}"
             echo performance | tee $GOVERNOR_FILES >/dev/null 2>&1
             if [ $? -ne 0 ]; then
-                echo -e "${YELLOW}设置 CPU 频率失败，可能不支持或权限不足${NC}"
+                echo -e "${YELLOW}设置 CPU 频率失败，可能权限不足或硬件不支持${NC}"
                 log "设置 CPU 频率失败"
             else
-                # 创建 systemd 服务确保持久化
                 echo -e "${BLUE}创建 CPU 优化服务...${NC}"
                 cat <<EOF > "$SERVICE_FILE"
 [Unit]
@@ -229,13 +330,14 @@ EOF
                 fi
             fi
         else
-            echo -e "${YELLOW}CPU 频率管理文件不可用，跳过设置${NC}"
+            echo -e "${YELLOW}CPU 频率管理文件不可用，已尝试升级内核${NC}"
             log "CPU 频率管理文件不可用"
         fi
     fi
 
     echo -e "${GREEN}优化已应用并设置为永久生效！${NC}"
     log "优化应用完成"
+    [ "$NEED_REBOOT" = "yes" ] && echo -e "${RED}请重启系统以应用新内核！${NC}"
 }
 
 # 取消优化（恢复备份并移除持久化设置）
