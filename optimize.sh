@@ -27,7 +27,7 @@ install_dependencies() {
     echo -e "${YELLOW}检测并安装所需依赖...${NC}"
     log "开始安装依赖"
 
-    # 检测包管理器
+    # 检测包管理器并设置命令
     if command -v apt-get >/dev/null 2>&1; then
         PKG_MANAGER="apt-get"
         UPDATE_CMD="apt-get update -y"
@@ -48,6 +48,21 @@ install_dependencies() {
         UPDATE_CMD="pacman -Sy"
         INSTALL_CMD="pacman -S --noconfirm"
         DISTRO="Arch Linux"
+    elif command -v apk >/dev/null 2>&1; then
+        PKG_MANAGER="apk"
+        UPDATE_CMD="apk update"
+        INSTALL_CMD="apk add"
+        DISTRO="Alpine Linux"
+    elif command -v emerge >/dev/null 2>&1; then
+        PKG_MANAGER="emerge"
+        UPDATE_CMD="emerge --sync"
+        INSTALL_CMD="emerge -q"
+        DISTRO="Gentoo"
+    elif command -v zypper >/dev/null 2>&1; then
+        PKG_MANAGER="zypper"
+        UPDATE_CMD="zypper refresh"
+        INSTALL_CMD="zypper install -y"
+        DISTRO="openSUSE"
     else
         echo -e "${RED}无法识别的包管理器，请手动安装依赖：procps, systemd${NC}"
         log "无法识别包管理器，退出"
@@ -55,23 +70,32 @@ install_dependencies() {
     fi
 
     # 更新包索引（仅执行一次）
+    echo -e "${BLUE}更新包索引...${NC}"
     $UPDATE_CMD || { echo -e "${RED}更新包索引失败${NC}"; log "更新包索引失败"; exit 1; }
 
-    # 检查并安装必要工具
+    # 安装必要工具（根据发行版调整包名）
     for pkg in procps systemd; do
-        if ! dpkg -l "$pkg" >/dev/null 2>&1 && ! rpm -q "$pkg" >/dev/null 2>&1 && ! pacman -Qs "$pkg" >/dev/null 2>&1; then
-            echo -e "${BLUE}安装 $pkg...${NC}"
-            $INSTALL_CMD "$pkg" || { echo -e "${RED}安装 $pkg 失败${NC}"; log "安装 $pkg 失败"; exit 1; }
+        case $PKG_MANAGER in
+            "apk") pkg_alt="procps-ng" ;;  # Alpine 使用 procps-ng
+            "emerge") pkg_alt="sys-process/procps sys-apps/systemd" ;;  # Gentoo 使用类别
+            *) pkg_alt="$pkg" ;;
+        esac
+        if ! command -v ps >/dev/null 2>&1 || ! command -v systemctl >/dev/null 2>&1; then
+            echo -e "${BLUE}安装 $pkg_alt...${NC}"
+            $INSTALL_CMD $pkg_alt || { echo -e "${RED}安装 $pkg_alt 失败${NC}"; log "安装 $pkg_alt 失败"; exit 1; }
         fi
     done
 
-    # 安装 CPU 频率管理工具
-    if [ -d /sys/devices/system/cpu ] && ! command -v cpufreq-info >/dev/null 2>&1; then
+    # 安装 CPU 频率管理工具（扩展支持）
+    if [ -d /sys/devices/system/cpu ] && ! command -v cpufreq-info >/dev/null 2>&1 && ! command -v cpupower >/dev/null 2>&1; then
         echo -e "${BLUE}安装 CPU 频率管理工具...${NC}"
         case $PKG_MANAGER in
             "apt-get") $INSTALL_CMD cpufrequtils && CPU_TOOL="cpufrequtils" ;;
             "yum"|"dnf") $INSTALL_CMD cpupowerutils || $INSTALL_CMD cpufreq-utils && CPU_TOOL="cpupowerutils 或 cpufreq-utils" ;;
             "pacman") $INSTALL_CMD cpupower && CPU_TOOL="cpupower" ;;
+            "apk") $INSTALL_CMD cpufreq-utils && CPU_TOOL="cpufreq-utils" ;;
+            "emerge") $INSTALL_CMD sys-power/cpupower && CPU_TOOL="cpupower" ;;
+            "zypper") $INSTALL_CMD cpupower && CPU_TOOL="cpupower" ;;
         esac
     else
         CPU_TOOL="已安装或无需安装"
@@ -83,7 +107,7 @@ install_dependencies() {
         echo -e "${BLUE}检查并加载 TCP BBR 模块...${NC}"
         modprobe tcp_bbr 2>/dev/null
         if lsmod | grep -q tcp_bbr; then
-            echo "tcp_bbr" >> /etc/modules-load.d/bbr.conf
+            echo "tcp_bbr" >> /etc/modules-load.d/bbr.conf 2>/dev/null || echo "tcp_bbr" >> /etc/modules
             BBR_STATUS="已启用"
         else
             echo -e "${YELLOW}当前内核不支持 BBR 或需手动启用${NC}"
@@ -118,20 +142,22 @@ check_optimizations() {
 
     # 检查 CPU 配置
     if [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor ]; then
-        CURRENT_GOVERNOR=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)
+        CURRENT_GOVERNOR=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "不可用")
         [ "$CURRENT_GOVERNOR" = "performance" ] && echo -e "${GREEN}CPU 频率管理模式: $CURRENT_GOVERNOR (已优化)${NC}" || echo -e "${RED}CPU 频率管理模式: $CURRENT_GOVERNOR (未优化)${NC}"
     else
         echo -e "${YELLOW}CPU 频率管理模式: 不可用${NC}"
     fi
 
-    # 检查系统参数
+    # 检查系统参数（动态获取预期值）
+    total_mem=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+    rmem_max=$((total_mem * 1024 / 4))
     check_param "vm.swappiness" "10" "vm.swappiness"
-    check_param "net.core.rmem_max" "26214400" "net.core.rmem_max"
-    check_param "net.core.wmem_max" "26214400" "net.core.wmem_max"
+    check_param "net.core.rmem_max" "$rmem_max" "net.core.rmem_max"
+    check_param "net.core.wmem_max" "$rmem_max" "net.core.wmem_max"
 
     # 检查 TCP 拥塞控制
     if [ -f /proc/sys/net/ipv4/tcp_congestion_control ]; then
-        CURRENT_CONGESTION=$(cat /proc/sys/net/ipv4/tcp_congestion_control)
+        CURRENT_CONGESTION=$(cat /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || echo "不可用")
         if grep -q bbr /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null; then
             [ "$CURRENT_CONGESTION" = "bbr" ] && echo -e "${GREEN}TCP 拥塞控制: $CURRENT_CONGESTION (已优化)${NC}" || echo -e "${RED}TCP 拥塞控制: $CURRENT_CONGESTION (未优化, BBR 可用但未启用)${NC}"
         else
@@ -161,14 +187,21 @@ apply_optimizations() {
     rmem_max=$((total_mem * 1024 / 4))  # 内存的 1/4，单位字节
     wmem_max=$rmem_max
 
-    # 备份当前设置
+    # 备份当前设置（增强健壮性）
     echo -e "${BLUE}备份当前设置到 $BACKUP_FILE${NC}"
+    touch "$BACKUP_FILE" 2>/dev/null || { echo -e "${RED}无法创建备份文件，请检查权限${NC}"; log "备份文件创建失败"; exit 1; }
+    chmod 600 "$BACKUP_FILE"  # 设置安全权限
     {
-        sysctl -a 2>/dev/null | grep -E "vm.swappiness|net.core.rmem_max|net.core.wmem_max|vm.dirty_ratio|vm.dirty_background_ratio|net.ipv4.tcp_congestion_control|net.core.netdev_max_backlog|net.core.somaxconn|net.ipv4.tcp_max_syn_backlog|net.ipv4.tcp_syncookies|net.ipv4.tcp_fin_timeout|net.ipv4.tcp_tw_reuse"
-        [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor ] && echo "cpu_governor=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
-    } > "$BACKUP_FILE" || { echo -e "${RED}备份失败${NC}"; log "备份失败"; exit 1; }
+        sysctl -a 2>/dev/null | grep -E "vm.swappiness|net.core.rmem_max|net.core.wmem_max|vm.dirty_ratio|vm.dirty_background_ratio|net.ipv4.tcp_congestion_control|net.core.netdev_max_backlog|net.core.somaxconn|net.ipv4.tcp_max_syn_backlog|net.ipv4.tcp_syncookies|net.ipv4.tcp_fin_timeout|net.ipv4.tcp_tw_reuse" || echo "# 部分 sysctl 参数不可用"
+        if [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor ]; then
+            governor=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "unknown")
+            echo "cpu_governor=$governor"
+        fi
+    } > "$BACKUP_FILE" || { echo -e "${RED}备份失败，请检查磁盘空间或权限${NC}"; log "备份失败"; exit 1; }
 
     # 应用 sysctl 优化
+    echo -e "${BLUE}生成 sysctl 配置文件...${NC}"
+    mkdir -p /etc/sysctl.d 2>/dev/null
     cat <<EOF > "$SYSCTL_CONF"
 # 系统优化
 vm.swappiness = 10
@@ -196,8 +229,9 @@ EOF
     # 设置 CPU 频率管理为 performance 并持久化
     if [ -d /sys/devices/system/cpu ]; then
         echo -e "${BLUE}设置 CPU 频率管理模式为 performance${NC}"
-        echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null 2>&1 || { echo -e "${RED}设置 CPU 频率失败${NC}"; log "设置 CPU 频率失败"; }
+        echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null 2>&1 || { echo -e "${YELLOW}设置 CPU 频率失败，可能不支持${NC}"; log "设置 CPU 频率失败"; }
 
+        echo -e "${BLUE}创建 CPU 优化服务...${NC}"
         cat <<EOF > "$SERVICE_FILE"
 [Unit]
 Description=CPU Optimizer Service
@@ -211,8 +245,8 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 EOF
-        systemctl daemon-reload
-        systemctl enable cpu-optimizer.service && systemctl start cpu-optimizer.service || { echo -e "${RED}启用 CPU 服务失败${NC}"; log "启用 CPU 服务失败"; }
+        systemctl daemon-reload 2>/dev/null
+        systemctl enable cpu-optimizer.service 2>/dev/null && systemctl start cpu-optimizer.service 2>/dev/null || { echo -e "${YELLOW}启用 CPU 服务失败，可能无 systemd${NC}"; log "启用 CPU 服务失败"; }
     fi
 
     echo -e "${GREEN}优化已应用并设置为永久生效！${NC}"
@@ -249,7 +283,7 @@ revert_optimizations() {
         systemctl disable cpu-optimizer.service >/dev/null 2>&1
         systemctl stop cpu-optimizer.service >/dev/null 2>&1
         rm -f "$SERVICE_FILE"
-        systemctl daemon-reload
+        systemctl daemon-reload 2>/dev/null
     fi
 
     # 清理备份文件
