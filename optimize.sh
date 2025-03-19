@@ -101,7 +101,7 @@ install_dependencies() {
     echo -e "  TCP BBR 状态: $BBR_STATUS"
 }
 
-# 检查当前优化状态（自动分析服务器配置及网络线路）
+# 检查当前优化状态
 check_optimizations() {
     echo -e "${YELLOW}当前系统优化状态：${NC}"
     echo -e "${BLUE}----------------${NC}"
@@ -109,46 +109,26 @@ check_optimizations() {
     # 检查 CPU 配置
     if [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor ]; then
         CURRENT_GOVERNOR=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)
-        if [ "$CURRENT_GOVERNOR" = "performance" ]; then
-            echo -e "${GREEN}CPU 频率管理模式: $CURRENT_GOVERNOR (已优化)${NC}"
-        else
-            echo -e "${RED}CPU 频率管理模式: $CURRENT_GOVERNOR (未优化)${NC}"
-        fi
+        [ "$CURRENT_GOVERNOR" = "performance" ] && echo -e "${GREEN}CPU 频率管理模式: $CURRENT_GOVERNOR (已优化)${NC}" || echo -e "${RED}CPU 频率管理模式: $CURRENT_GOVERNOR (未优化)${NC}"
     else
         echo -e "${YELLOW}CPU 频率管理模式: 不可用${NC}"
     fi
 
     # 检查系统参数
     SWAPPINESS=$(sysctl -n vm.swappiness 2>/dev/null || echo "不可用")
-    if [ "$SWAPPINESS" = "10" ]; then
-        echo -e "${GREEN}vm.swappiness: $SWAPPINESS (已优化)${NC}"
-    else
-        echo -e "${RED}vm.swappiness: $SWAPPINESS (未优化)${NC}"
-    fi
+    [ "$SWAPPINESS" = "10" ] && echo -e "${GREEN}vm.swappiness: $SWAPPINESS (已优化)${NC}" || echo -e "${RED}vm.swappiness: $SWAPPINESS (未优化)${NC}"
 
     RMEM_MAX=$(sysctl -n net.core.rmem_max 2>/dev/null || echo "不可用")
-    if [ "$RMEM_MAX" = "26214400" ]; then
-        echo -e "${GREEN}net.core.rmem_max: $RMEM_MAX (已优化)${NC}"
-    else
-        echo -e "${RED}net.core.rmem_max: $RMEM_MAX (未优化)${NC}"
-    fi
+    [ "$RMEM_MAX" = "26214400" ] && echo -e "${GREEN}net.core.rmem_max: $RMEM_MAX (已优化)${NC}" || echo -e "${RED}net.core.rmem_max: $RMEM_MAX (未优化)${NC}"
 
     WMEM_MAX=$(sysctl -n net.core.wmem_max 2>/dev/null || echo "不可用")
-    if [ "$WMEM_MAX" = "26214400" ]; then
-        echo -e "${GREEN}net.core.wmem_max: $WMEM_MAX (已优化)${NC}"
-    else
-        echo -e "${RED}net.core.wmem_max: $WMEM_MAX (未优化)${NC}"
-    fi
+    [ "$WMEM_MAX" = "26214400" ] && echo -e "${GREEN}net.core.wmem_max: $WMEM_MAX (已优化)${NC}" || echo -e "${RED}net.core.wmem_max: $WMEM_MAX (未优化)${NC}"
 
     # 检查 TCP 拥塞控制
     if [ -f /proc/sys/net/ipv4/tcp_congestion_control ]; then
         CURRENT_CONGESTION=$(cat /proc/sys/net/ipv4/tcp_congestion_control)
         if grep -q bbr /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null; then
-            if [ "$CURRENT_CONGESTION" = "bbr" ]; then
-                echo -e "${GREEN}TCP 拥塞控制: $CURRENT_CONGESTION (已优化)${NC}"
-            else
-                echo -e "${RED}TCP 拥塞控制: $CURRENT_CONGESTION (未优化, BBR 可用但未启用)${NC}"
-            fi
+            [ "$CURRENT_CONGESTION" = "bbr" ] && echo -e "${GREEN}TCP 拥塞控制: $CURRENT_CONGESTION (已优化)${NC}" || echo -e "${RED}TCP 拥塞控制: $CURRENT_CONGESTION (未优化, BBR 可用但未启用)${NC}"
         else
             echo -e "${YELLOW}TCP 拥塞控制: $CURRENT_CONGESTION (BBR 不支持)${NC}"
         fi
@@ -158,18 +138,10 @@ check_optimizations() {
 
     # 检查网络线路
     DEFAULT_GATEWAY=$(ip route show default | awk '{print $3}' | head -n 1)
-    if [ -n "$DEFAULT_GATEWAY" ]; then
-        echo -e "${GREEN}默认网关: $DEFAULT_GATEWAY (已配置)${NC}"
-    else
-        echo -e "${RED}默认网关: 未配置${NC}"
-    fi
+    [ -n "$DEFAULT_GATEWAY" ] && echo -e "${GREEN}默认网关: $DEFAULT_GATEWAY (已配置)${NC}" || echo -e "${RED}默认网关: 未配置${NC}"
 
     DNS_SERVERS=$(grep nameserver /etc/resolv.conf | awk '{print $2}' | tr '\n' ', ' | sed 's/, $//')
-    if [ -n "$DNS_SERVERS" ]; then
-        echo -e "${GREEN}DNS 解析器: $DNS_SERVERS (已配置)${NC}"
-    else
-        echo -e "${RED}DNS 解析器: 未配置${NC}"
-    fi
+    [ -n "$DNS_SERVERS" ] && echo -e "${GREEN}DNS 解析器: $DNS_SERVERS (已配置)${NC}" || echo -e "${RED}DNS 解析器: 未配置${NC}"
 
     echo -e "${BLUE}----------------${NC}"
 }
@@ -182,12 +154,10 @@ apply_optimizations() {
     echo -e "${BLUE}备份当前设置到 $BACKUP_FILE${NC}"
     {
         sysctl -a 2>/dev/null | grep -E "vm.swappiness|net.core.rmem_max|net.core.wmem_max|vm.dirty_ratio|vm.dirty_background_ratio|net.ipv4.tcp_congestion_control|net.core.netdev_max_backlog|net.core.somaxconn|net.ipv4.tcp_max_syn_backlog|net.ipv4.tcp_syncookies|net.ipv4.tcp_fin_timeout|net.ipv4.tcp_tw_reuse"
-        if [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor ]; then
-            echo "cpu_governor=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
-        fi
+        [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor ] && echo "cpu_governor=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
     } > "$BACKUP_FILE"
 
-    # 应用 sysctl 优化，包括 TCP 网络调优
+    # 应用 sysctl 优化
     cat <<EOF > "$SYSCTL_CONF"
 # 系统优化
 vm.swappiness = 10
@@ -244,26 +214,28 @@ EOF
 revert_optimizations() {
     if [ ! -f "$BACKUP_FILE" ]; then
         echo -e "${RED}未找到备份文件，无法恢复优化！${NC}"
-        return
+        return 1
     }
 
     echo -e "${YELLOW}取消优化并恢复原始设置...${NC}"
 
     # 恢复 sysctl 设置
-    while IFS='=' read -r key value; do
+    while IFS=' = ' read -r key value; do
         key=$(echo "$key" | xargs)
         value=$(echo "$value" | xargs)
-        if [[ "$key" == cpu_governor ]]; then
-            if [ -d /sys/devices/system/cpu ]; then
-                echo "$value" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null 2>&1
+        if [ -n "$key" ] && [ -n "$value" ]; then
+            if [ "$key" = "cpu_governor" ]; then
+                if [ -d /sys/devices/system/cpu ]; then
+                    echo "$value" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null 2>&1
+                fi
+            else
+                sysctl -w "$key=$value" >/dev/null 2>&1
             fi
-        else
-            sysctl -w "$key=$value" >/dev/null 2>&1
         fi
     done < "$BACKUP_FILE"
 
     # 删除持久化文件
-    rm -f "$SYSCTL_CONF"
+    [ -f "$SYSCTL_CONF" ] && rm -f "$SYSCTL_CONF"
     if [ -f "$SERVICE_FILE" ]; then
         systemctl disable cpu-optimizer.service
         systemctl stop cpu-optimizer.service
@@ -272,7 +244,7 @@ revert_optimizations() {
     fi
 
     # 清理备份文件
-    rm -f "$BACKUP_FILE"
+    [ -f "$BACKUP_FILE" ] && rm -f "$BACKUP_FILE"
 
     echo -e "${GREEN}优化已取消，系统已恢复到原始状态！${NC}"
 }
@@ -291,21 +263,10 @@ while true; do
     read -p "$(echo -e ${YELLOW}请选择选项 \(1-4\): ${NC})" choice
 
     case $choice in
-        1)
-            check_optimizations
-            ;;
-        2)
-            apply_optimizations
-            ;;
-        3)
-            revert_optimizations
-            ;;
-        4)
-            echo -e "${GREEN}退出脚本${NC}"
-            exit 0
-            ;;
-        *)
-            echo -e "${RED}无效选项，请输入 1-4${NC}"
-            ;;
+        1) check_optimizations ;;
+        2) apply_optimizations ;;
+        3) revert_optimizations ;;
+        4) echo -e "${GREEN}退出脚本${NC}"; exit 0 ;;
+        *) echo -e "${RED}无效选项，请输入 1-4${NC}" ;;
     esac
 done
