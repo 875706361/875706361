@@ -27,76 +27,49 @@ install_dependencies() {
     echo -e "${YELLOW}检测并安装所需依赖...${NC}"
     log "开始安装依赖"
 
-    # 检测包管理器并设置命令
+    # 检测包管理器（针对 CentOS 和 Ubuntu）
     if command -v apt-get >/dev/null 2>&1; then
         PKG_MANAGER="apt-get"
         UPDATE_CMD="apt-get update -y"
         INSTALL_CMD="apt-get install -y"
-        DISTRO="Debian/Ubuntu"
+        DISTRO="Ubuntu"
     elif command -v dnf >/dev/null 2>&1; then
         PKG_MANAGER="dnf"
         UPDATE_CMD="dnf update -y"
         INSTALL_CMD="dnf install -y"
-        DISTRO="Fedora"
+        DISTRO="CentOS 8+"
     elif command -v yum >/dev/null 2>&1; then
         PKG_MANAGER="yum"
         UPDATE_CMD="yum update -y"
         INSTALL_CMD="yum install -y"
-        DISTRO="RHEL/CentOS"
-    elif command -v pacman >/dev/null 2>&1; then
-        PKG_MANAGER="pacman"
-        UPDATE_CMD="pacman -Sy"
-        INSTALL_CMD="pacman -S --noconfirm"
-        DISTRO="Arch Linux"
-    elif command -v apk >/dev/null 2>&1; then
-        PKG_MANAGER="apk"
-        UPDATE_CMD="apk update"
-        INSTALL_CMD="apk add"
-        DISTRO="Alpine Linux"
-    elif command -v emerge >/dev/null 2>&1; then
-        PKG_MANAGER="emerge"
-        UPDATE_CMD="emerge --sync"
-        INSTALL_CMD="emerge -q"
-        DISTRO="Gentoo"
-    elif command -v zypper >/dev/null 2>&1; then
-        PKG_MANAGER="zypper"
-        UPDATE_CMD="zypper refresh"
-        INSTALL_CMD="zypper install -y"
-        DISTRO="openSUSE"
+        DISTRO="CentOS 7"
     else
         echo -e "${RED}无法识别的包管理器，请手动安装依赖：procps, systemd${NC}"
         log "无法识别包管理器，退出"
         exit 1
     fi
 
-    # 更新包索引（仅执行一次）
+    # 更新包索引
     echo -e "${BLUE}更新包索引...${NC}"
     $UPDATE_CMD || { echo -e "${RED}更新包索引失败${NC}"; log "更新包索引失败"; exit 1; }
 
-    # 安装必要工具（根据发行版调整包名）
+    # 安装必要工具
     for pkg in procps systemd; do
-        case $PKG_MANAGER in
-            "apk") pkg_alt="procps-ng" ;;  # Alpine 使用 procps-ng
-            "emerge") pkg_alt="sys-process/procps sys-apps/systemd" ;;  # Gentoo 使用类别
-            *) pkg_alt="$pkg" ;;
-        esac
         if ! command -v ps >/dev/null 2>&1 || ! command -v systemctl >/dev/null 2>&1; then
-            echo -e "${BLUE}安装 $pkg_alt...${NC}"
-            $INSTALL_CMD $pkg_alt || { echo -e "${RED}安装 $pkg_alt 失败${NC}"; log "安装 $pkg_alt 失败"; exit 1; }
+            echo -e "${BLUE}安装 $pkg...${NC}"
+            $INSTALL_CMD $pkg || { echo -e "${RED}安装 $pkg 失败${NC}"; log "安装 $pkg 失败"; exit 1; }
         fi
     done
 
-    # 安装 CPU 频率管理工具（扩展支持）
+    # 安装 CPU 频率管理工具
     if [ -d /sys/devices/system/cpu ] && ! command -v cpufreq-info >/dev/null 2>&1 && ! command -v cpupower >/dev/null 2>&1; then
         echo -e "${BLUE}安装 CPU 频率管理工具...${NC}"
         case $PKG_MANAGER in
             "apt-get") $INSTALL_CMD cpufrequtils && CPU_TOOL="cpufrequtils" ;;
-            "yum"|"dnf") $INSTALL_CMD cpupowerutils || $INSTALL_CMD cpufreq-utils && CPU_TOOL="cpupowerutils 或 cpufreq-utils" ;;
-            "pacman") $INSTALL_CMD cpupower && CPU_TOOL="cpupower" ;;
-            "apk") $INSTALL_CMD cpufreq-utils && CPU_TOOL="cpufreq-utils" ;;
-            "emerge") $INSTALL_CMD sys-power/cpupower && CPU_TOOL="cpupower" ;;
-            "zypper") $INSTALL_CMD cpupower && CPU_TOOL="cpupower" ;;
+            "yum"|"dnf") $INSTALL_CMD cpupower || $INSTALL_CMD cpufreq-utils && CPU_TOOL="cpupower 或 cpufreq-utils" ;;
         esac
+        # 加载 CPU 频率模块
+        modprobe acpi-cpufreq 2>/dev/null || modprobe intel_pstate 2>/dev/null
     else
         CPU_TOOL="已安装或无需安装"
     fi
@@ -148,7 +121,7 @@ check_optimizations() {
         echo -e "${YELLOW}CPU 频率管理模式: 不可用${NC}"
     fi
 
-    # 检查系统参数（动态获取预期值）
+    # 检查系统参数
     total_mem=$(grep MemTotal /proc/meminfo | awk '{print $2}')
     rmem_max=$((total_mem * 1024 / 4))
     check_param "vm.swappiness" "10" "vm.swappiness"
@@ -167,19 +140,12 @@ check_optimizations() {
         echo -e "${YELLOW}TCP 拥塞控制: 不可用${NC}"
     fi
 
-    # 检查网络线路
-    DEFAULT_GATEWAY=$(ip route show default | awk '{print $3}' | head -n 1)
-    [ -n "$DEFAULT_GATEWAY" ] && echo -e "${GREEN}默认网关: $DEFAULT_GATEWAY (已配置)${NC}" || echo -e "${RED}默认网关: 未配置${NC}"
-
-    DNS_SERVERS=$(grep nameserver /etc/resolv.conf | awk '{print $2}' | tr '\n' ', ' | sed 's/, $//')
-    [ -n "$DNS_SERVERS" ] && echo -e "${GREEN}DNS 解析器: $DNS_SERVERS (已配置)${NC}" || echo -e "${RED}DNS 解析器: 未配置${NC}"
-
     echo -e "${BLUE}----------------${NC}"
 }
 
 # 应用优化（永久生效）
 apply_optimizations() {
-    echo -e "${YELLOW}应用优化设置...${NC}"
+    echo -e "${YELLOW}开始应用优化${NC}"
     log "开始应用优化"
 
     # 动态计算网络缓冲区大小
@@ -187,10 +153,10 @@ apply_optimizations() {
     rmem_max=$((total_mem * 1024 / 4))  # 内存的 1/4，单位字节
     wmem_max=$rmem_max
 
-    # 备份当前设置（增强健壮性）
+    # 备份当前设置
     echo -e "${BLUE}备份当前设置到 $BACKUP_FILE${NC}"
-    touch "$BACKUP_FILE" 2>/dev/null || { echo -e "${RED}无法创建备份文件，请检查权限${NC}"; log "备份文件创建失败"; exit 1; }
-    chmod 600 "$BACKUP_FILE"  # 设置安全权限
+    touch "$BACKUP_FILE" 2>/dev/null || { echo -e "${RED}无法创建备份文件，请检查权限或磁盘空间${NC}"; log "备份文件创建失败"; exit 1; }
+    chmod 600 "$BACKUP_FILE"
     {
         sysctl -a 2>/dev/null | grep -E "vm.swappiness|net.core.rmem_max|net.core.wmem_max|vm.dirty_ratio|vm.dirty_background_ratio|net.ipv4.tcp_congestion_control|net.core.netdev_max_backlog|net.core.somaxconn|net.ipv4.tcp_max_syn_backlog|net.ipv4.tcp_syncookies|net.ipv4.tcp_fin_timeout|net.ipv4.tcp_tw_reuse" || echo "# 部分 sysctl 参数不可用"
         if [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor ]; then
@@ -223,16 +189,21 @@ EOF
     if grep -q bbr /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null; then
         echo "net.ipv4.tcp_congestion_control = bbr" >> "$SYSCTL_CONF"
     fi
-
     sysctl -p "$SYSCTL_CONF" >/dev/null 2>&1 || { echo -e "${RED}应用 sysctl 设置失败${NC}"; log "应用 sysctl 设置失败"; exit 1; }
 
-    # 设置 CPU 频率管理为 performance 并持久化
+    # 设置 CPU 频率管理为 performance
     if [ -d /sys/devices/system/cpu ]; then
         echo -e "${BLUE}设置 CPU 频率管理模式为 performance${NC}"
-        echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null 2>&1 || { echo -e "${YELLOW}设置 CPU 频率失败，可能不支持${NC}"; log "设置 CPU 频率失败"; }
-
-        echo -e "${BLUE}创建 CPU 优化服务...${NC}"
-        cat <<EOF > "$SERVICE_FILE"
+        GOVERNOR_FILES=$(ls /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null)
+        if [ -n "$GOVERNOR_FILES" ]; then
+            echo performance | tee $GOVERNOR_FILES >/dev/null 2>&1
+            if [ $? -ne 0 ]; then
+                echo -e "${YELLOW}设置 CPU 频率失败，可能不支持或权限不足${NC}"
+                log "设置 CPU 频率失败"
+            else
+                # 创建 systemd 服务确保持久化
+                echo -e "${BLUE}创建 CPU 优化服务...${NC}"
+                cat <<EOF > "$SERVICE_FILE"
 [Unit]
 Description=CPU Optimizer Service
 After=network.target
@@ -245,8 +216,22 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 EOF
-        systemctl daemon-reload 2>/dev/null
-        systemctl enable cpu-optimizer.service 2>/dev/null && systemctl start cpu-optimizer.service 2>/dev/null || { echo -e "${YELLOW}启用 CPU 服务失败，可能无 systemd${NC}"; log "启用 CPU 服务失败"; }
+                if command -v systemctl >/dev/null 2>&1; then
+                    systemctl daemon-reload 2>/dev/null
+                    systemctl enable cpu-optimizer.service 2>/dev/null && systemctl start cpu-optimizer.service 2>/dev/null
+                    if [ $? -ne 0 ]; then
+                        echo -e "${YELLOW}启用 CPU 服务失败，请检查 systemd 配置${NC}"
+                        log "启用 CPU 服务失败"
+                    fi
+                else
+                    echo -e "${YELLOW}系统不支持 systemd，CPU 频率设置将不持久${NC}"
+                    log "无 systemd 支持"
+                fi
+            fi
+        else
+            echo -e "${YELLOW}CPU 频率管理文件不可用，跳过设置${NC}"
+            log "CPU 频率管理文件不可用"
+        fi
     fi
 
     echo -e "${GREEN}优化已应用并设置为永久生效！${NC}"
