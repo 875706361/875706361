@@ -25,14 +25,50 @@ prompt_reboot() {
     done
 }
 
-# 函数：检查内核版本
+# 函数：检测并安装包管理器依赖
+install_package() {
+    local pkg=$1
+    print_info "安装 $pkg..."
+    if command -v apt &> /dev/null; then
+        sudo apt update && sudo apt install -y "$pkg"
+    elif command -v yum &> /dev/null; then
+        sudo yum install -y "$pkg"
+    elif command -v dnf &> /dev/null; then
+        sudo dnf install -y "$pkg"
+    elif command -v pacman &> /dev/null; then
+        sudo pacman -S --noconfirm "$pkg"
+    else
+        print_error "无法确定包管理器，请手动安装 $pkg。"
+        exit 1
+    fi
+}
+
+# 函数：检查内核版本并升级（若不支持 BBR）
 check_kernel_version() {
     local required_version="4.9"
     local current_version=$(uname -r | cut -d'.' -f1-2)
     print_info "检查内核版本..."
     if [[ "$(printf '%s\n' "$required_version" "$current_version" | sort -V | head -n1)" != "$required_version" ]]; then
-        print_error "当前内核版本 $current_version 不支持 BBR。请升级到 4.9 或更高版本。"
-        exit 1
+        print_warning "当前内核 $current_version 不支持 BBR，需升级到 4.9 或更高版本。"
+        read -p "是否尝试自动升级内核？(y/n): " upgrade_choice
+        if [[ "$upgrade_choice" =~ ^[Yy]$ ]]; then
+            if command -v apt &> /dev/null; then
+                sudo apt update && sudo apt install -y linux-generic-hwe-22.04
+            elif command -v yum &> /dev/null; then
+                sudo yum install -y kernel
+            elif command -v dnf &> /dev/null; then
+                sudo dnf install -y kernel
+            else
+                print_error "不支持自动升级内核，请手动升级到 4.9+。"
+                exit 1
+            fi
+            print_success "内核已升级，请重启系统后重新运行脚本。"
+            prompt_reboot
+            exit 0
+        else
+            print_error "用户取消内核升级，脚本退出。"
+            exit 1
+        fi
     else
         print_success "内核版本 $current_version 支持 BBR。"
     fi
@@ -42,32 +78,10 @@ check_kernel_version() {
 install_necessary_software() {
     print_info "检查并安装必要软件..."
     if ! command -v sysctl &> /dev/null; then
-        print_warning "sysctl 未安装，正在尝试安装..."
-        if command -v apt &> /dev/null; then
-            sudo apt update && sudo apt install -y procps
-        elif command -v yum &> /dev/null; then
-            sudo yum install -y procps-ng
-        elif command -v dnf &> /dev/null; then
-            sudo dnf install -y procps-ng
-        elif command -v pacman &> /dev/null; then
-            sudo pacman -S --noconfirm procps-ng
-        else
-            print_error "无法确定包管理器，请手动安装 procps 或 procps-ng。"
-            exit 1
-        fi
+        install_package "procps"
     fi
     if ! command -v cpufreq-info &> /dev/null; then
-        print_warning "cpufrequtils 未安装，正在尝试安装..."
-        if command -v apt &> /dev/null; then
-            sudo apt update && sudo apt install -y cpufrequtils
-        elif command -v yum &> /dev/null; then
-            sudo yum install -y cpufrequtils
-        elif command -v dnf &> /dev/null; then
-            sudo dnf install -y cpufrequtils
-        else
-            print_error "无法确定包管理器，请手动安装 cpufrequtils。"
-            exit 1
-        fi
+        install_package "cpufrequtils"
     fi
     print_success "必要软件已安装。"
 }
@@ -75,13 +89,18 @@ install_necessary_software() {
 # 函数：永久开启 BBR
 enable_bbr() {
     print_info "正在永久开启 BBR..."
-    if [ -f /lib/modules/$(uname -r)/kernel/net/ipv4/tcp_bbr.ko ]; then
-        sudo modprobe tcp_bbr 2>/dev/null || print_warning "加载 tcp_bbr 模块失败，可能是内核问题。"
-        grep -q "tcp_bbr" /etc/modules || echo "tcp_bbr" | sudo tee -a /etc/modules >/dev/null
-    else
-        print_error "未找到 tcp_bbr 模块，请确认内核支持 BBR。"
-        return 1
+    if [ ! -f /lib/modules/$(uname -r)/kernel/net/ipv4/tcp_bbr.ko ]; then
+        print_warning "当前内核缺少 tcp_bbr 模块，尝试安装支持..."
+        read -p "是否尝试升级内核以支持 BBR？(y/n): " bbr_choice
+        if [[ "$bbr_choice" =~ ^[Yy]$ ]]; then
+            check_kernel_version # 复用内核升级逻辑
+        else
+            print_error "用户取消 BBR 支持安装，跳过此步骤。"
+            return 1
+        fi
     fi
+    sudo modprobe tcp_bbr 2>/dev/null || print_warning "加载 tcp_bbr 模块失败。"
+    grep -q "tcp_bbr" /etc/modules || echo "tcp_bbr" | sudo tee -a /etc/modules >/dev/null
     sudo sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1
     sudo sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1
     grep -q "net.core.default_qdisc" /etc/sysctl.conf || echo "net.core.default_qdisc=fq" | sudo tee -a /etc/sysctl.conf >/dev/null
@@ -113,7 +132,14 @@ EOF
         sudo systemctl enable cpu-performance.service >/dev/null 2>&1
         sudo systemctl start cpu-performance.service >/dev/null 2>&1
     else
-        print_warning "系统不支持 CPU 调速器设置，跳过此步骤。"
+        print_warning "系统不支持 CPU 调速器，尝试安装支持..."
+        read -p "是否安装 CPU 频率驱动（如 intel_pstate）？(y/n): " cpu_choice
+        if [[ "$cpu_choice" =~ ^[Yy]$ ]]; then
+            install_package "linux-tools-common"
+            print_success "已尝试安装 CPU 频率支持，请重启后检查。"
+        else
+            print_info "跳过 CPU 调速器设置。"
+        fi
     fi
     # 设置 I/O 调度器
     if [ -f /etc/default/grub ]; then
