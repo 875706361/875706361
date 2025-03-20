@@ -102,8 +102,8 @@ add_elrepo_repo() {
 update_kernel() {
     local current_kernel installed_kernels latest_kernel
     current_kernel=$(uname -r)
-    # 获取已安装的 kernel-ml 包列表
-    installed_kernels=$(rpm -qa | grep kernel-ml)
+    # 获取已安装的 kernel-ml 包列表（完整包名）
+    installed_kernels=$(rpm -qa | grep '^kernel-ml-')
     
     # 如果未安装 kernel-ml，则进行安装
     if [ -z "$installed_kernels" ]; then
@@ -113,7 +113,6 @@ update_kernel() {
         echo -e "${GREEN}新内核安装成功，更新 GRUB 配置...${NC}"
         grub2-set-default 0
         grub2-mkconfig -o /boot/grub2/grub.cfg
-        # 创建标识文件，提示重启以避免重复操作
         touch "$FLAG_FILE"
         log "新内核安装成功，等待重启以启用新内核"
         read -p "$(echo -e ${YELLOW}"请重启系统以使用新内核，是否立即重启？ (y/N): "${NC})" answer
@@ -127,28 +126,27 @@ update_kernel() {
             exit 0
         fi
     else
-        # 已安装 kernel-ml，则获取最新内核版本（取排序最后一项）
-        latest_kernel=$(echo "$installed_kernels" | sed 's/kernel-ml-//' | sort -V | tail -n 1)
+        # 已安装 kernel-ml 包，则取最新安装的包（完整包名比较）
+        latest_kernel=$(echo "$installed_kernels" | sort -V | tail -n 1)
         log "当前运行内核: $current_kernel"
-        log "最新安装内核: $latest_kernel"
-        # 如果当前运行内核与最新内核不一致，则说明新内核安装后尚未重启生效
-        if [[ "$current_kernel" != "$latest_kernel" ]]; then
-            echo -e "${RED}当前运行内核 ($current_kernel) 与最新安装内核 ($latest_kernel) 不一致${NC}"
-            log "当前运行内核与最新内核不一致"
-            # 如果标识文件不存在，则首次进入时进行卸载旧内核、更新 GRUB操作
+        log "最新安装内核包: $latest_kernel"
+        # 判断当前运行内核是否为 kernel-ml 内核（一般新内核包中会包含 "elrepo" 字样）
+        if [[ "$current_kernel" != *"elrepo"* ]]; then
+            echo -e "${RED}当前运行内核 ($current_kernel) 与新内核 ($latest_kernel) 不一致${NC}"
+            log "当前运行内核与新内核不一致"
+            # 如果标识文件不存在，则卸载旧 kernel-ml 包（保留最新包）
             if [ ! -f "$FLAG_FILE" ]; then
-                echo -e "${YELLOW}正在卸载旧的 kernel-ml 内核，仅保留最新内核 ($latest_kernel)${NC}"
-                for kernel in $(echo "$installed_kernels" | sed 's/kernel-ml-//'); do
-                    if [[ "$kernel" != "$latest_kernel" ]]; then
-                        echo -e "${RED}卸载旧内核: $kernel${NC}"
-                        $REMOVE_CMD "kernel-ml-$kernel"
+                for pkg in $installed_kernels; do
+                    if [ "$pkg" != "$latest_kernel" ]; then
+                        echo -e "${RED}卸载旧内核包: $pkg${NC}"
+                        $REMOVE_CMD "$pkg"
                     fi
                 done
                 echo -e "${GREEN}更新 GRUB 配置...${NC}"
                 grub2-set-default 0
                 grub2-mkconfig -o /boot/grub2/grub.cfg
                 touch "$FLAG_FILE"
-                log "内核更新操作完成，等待重启"
+                log "旧内核清理完成，等待重启"
                 read -p "$(echo -e ${YELLOW}"请重启系统以应用新内核，是否立即重启？ (y/N): "${NC})" answer
                 if [[ "$answer" =~ ^[Yy]$ ]]; then
                     echo -e "${GREEN}系统即将重启...${NC}"
@@ -160,13 +158,13 @@ update_kernel() {
                     exit 0
                 fi
             else
-                echo -e "${YELLOW}内核更新已应用，但系统尚未重启。请重启系统后再运行脚本。${NC}"
+                echo -e "${YELLOW}内核更新操作已完成，但系统尚未重启。请重启后再运行脚本。${NC}"
                 log "标识文件已存在，等待系统重启"
                 exit 0
             fi
         else
-            echo -e "${GREEN}当前运行内核 ($current_kernel) 已为最新，无需更新${NC}"
-            log "当前运行内核已是最新"
+            echo -e "${GREEN}当前运行内核 ($current_kernel) 已为新内核，无需更新${NC}"
+            log "当前运行内核已是新内核"
             [ -f "$FLAG_FILE" ] && rm -f "$FLAG_FILE"
         fi
     fi
@@ -238,11 +236,11 @@ check_optimizations() {
 
     local current_kernel installed_kernels latest_kernel
     current_kernel=$(uname -r)
-    installed_kernels=$(rpm -qa | grep kernel-ml)
-    latest_kernel=$(echo "$installed_kernels" | sed 's/kernel-ml-//' | sort -V | tail -n 1)
+    installed_kernels=$(rpm -qa | grep '^kernel-ml-')
+    latest_kernel=$(echo "$installed_kernels" | sort -V | tail -n 1)
 
     echo -e "${BLUE}当前运行内核:${NC} $current_kernel"
-    echo -e "${BLUE}最新安装内核:${NC} ${latest_kernel:-"未安装 kernel-ml"}"
+    echo -e "${BLUE}最新安装内核包:${NC} ${latest_kernel:-"未安装 kernel-ml"}"
 
     echo -e "${BLUE}sysctl 设置:${NC}"
     [ -f "$SYSCTL_CONF" ] && echo -e "${GREEN}sysctl 优化已应用${NC}" || echo -e "${RED}sysctl 优化未应用${NC}"
