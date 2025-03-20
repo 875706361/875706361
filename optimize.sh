@@ -34,23 +34,19 @@ detect_distro() {
         exit 1
     fi
 
-    if [ "$DISTRO" = "ubuntu" ]; then
-        PKG_MANAGER="apt-get"
-        UPDATE_CMD="apt-get update -y"
-        INSTALL_CMD="apt-get install -y"
-    elif [ "$DISTRO" = "centos" ]; then
-        PKG_MANAGER="yum"
-        UPDATE_CMD="yum update -y"
-        INSTALL_CMD="yum install -y"
-        if [ "${VERSION_ID%%.*}" -ge 8 ]; then
-            PKG_MANAGER="dnf"
-            UPDATE_CMD="dnf update -y"
-            INSTALL_CMD="dnf install -y"
-        fi
-    else
-        echo -e "${RED}不支持的系统类型: $DISTRO${NC}"
+    if [ "$DISTRO" != "centos" ]; then
+        echo -e "${RED}此脚本仅支持 CentOS 系统，检测到: $DISTRO${NC}"
         log "不支持的系统类型: $DISTRO"
         exit 1
+    fi
+
+    PKG_MANAGER="yum"
+    UPDATE_CMD="yum update -y"
+    INSTALL_CMD="yum install -y"
+    if [ "${VERSION_ID%%.*}" -ge 8 ]; then
+        PKG_MANAGER="dnf"
+        UPDATE_CMD="dnf update -y"
+        INSTALL_CMD="dnf install -y"
     fi
     echo -e "${BLUE}检测到系统: $DISTRO $VERSION_ID${NC}"
     log "检测到系统: $DISTRO $VERSION_ID"
@@ -62,62 +58,75 @@ install_dependencies() {
     log "开始安装依赖"
 
     $UPDATE_CMD || { echo -e "${RED}更新包索引失败${NC}"; log "更新包索引失败"; exit 1; }
-    $INSTALL_CMD procps systemd || { echo -e "${RED}安装 procps 和 systemd 失败${NC}"; log "安装 procps 和 systemd 失败"; exit 1; }
+    $INSTALL_CMD procps systemd cpupowerutils grub2-tools || { echo -e "${RED}安装依赖失败${NC}"; log "安装依赖失败"; exit 1; }
 
-    if [ "$DISTRO" = "ubuntu" ]; then
-        $INSTALL_CMD cpufrequtils || { echo -e "${RED}安装 cpufrequtils 失败${NC}"; log "安装 cpufrequtils 失败"; exit 1; }
-    elif [ "$DISTRO" = "centos" ]; then
-        $INSTALL_CMD cpupowerutils || { echo -e "${RED}安装 cpupowerutils 失败${NC}"; log "安装 cpupowerutils 失败"; exit 1; }
-        $INSTALL_CMD grub2-tools || { echo -e "${RED}安装 grub2-tools 失败${NC}"; log "安装 grub2-tools 失败"; exit 1; }
-    fi
     echo -e "${GREEN}依赖安装完成${NC}"
     log "依赖安装完成"
 }
 
-# 添加 ELRepo 仓库（仅 CentOS）
+# 添加 ELRepo 仓库
 add_elrepo_repo() {
-    if [ "$DISTRO" = "centos" ]; then
-        echo -e "${YELLOW}添加 ELRepo 仓库...${NC}"
-        log "开始添加 ELRepo 仓库"
+    echo -e "${YELLOW}添加 ELRepo 仓库...${NC}"
+    log "开始添加 ELRepo 仓库"
 
-        rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org || { echo -e "${RED}导入 ELRepo GPG 密钥失败${NC}"; log "导入 ELRepo GPG 密钥失败"; exit 1; }
+    rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org || { echo -e "${RED}导入 ELRepo GPG 密钥失败${NC}"; log "导入 ELRepo GPG 密钥失败"; exit 1; }
 
-        if [ "$VERSION_ID" = "7" ]; then
-            $INSTALL_CMD https://www.elrepo.org/elrepo-release-7.el7.elrepo.noarch.rpm
-        elif [ "$VERSION_ID" = "8" ]; then
-            $INSTALL_CMD https://www.elrepo.org/elrepo-release-8.el8.elrepo.noarch.rpm
-        elif [ "$VERSION_ID" = "9" ]; then
-            $INSTALL_CMD https://www.elrepo.org/elrepo-release-9.el9.elrepo.noarch.rpm
-        else
-            echo -e "${RED}不支持的 CentOS 版本: $VERSION_ID${NC}"
-            log "不支持的 CentOS 版本: $VERSION_ID"
-            exit 1
-        fi
-        [ $? -ne 0 ] && { echo -e "${RED}安装 ELRepo 仓库失败${NC}"; log "安装 ELRepo 仓库失败"; exit 1; }
-        echo -e "${GREEN}ELRepo 仓库添加成功${NC}"
-        log "ELRepo 仓库添加成功"
+    if [ "$VERSION_ID" = "7" ]; then
+        $INSTALL_CMD https://www.elrepo.org/elrepo-release-7.el7.elrepo.noarch.rpm
+    elif [ "$VERSION_ID" = "8" ]; then
+        $INSTALL_CMD https://www.elrepo.org/elrepo-release-8.el8.elrepo.noarch.rpm
+    elif [ "$VERSION_ID" = "9" ]; then
+        $INSTALL_CMD https://www.elrepo.org/elrepo-release-9.el9.elrepo.noarch.rpm
+    else
+        echo -e "${RED}不支持的 CentOS 版本: $VERSION_ID${NC}"
+        log "不支持的 CentOS 版本: $VERSION_ID"
+        exit 1
     fi
+    [ $? -ne 0 ] && { echo -e "${RED}安装 ELRepo 仓库失败${NC}"; log "安装 ELRepo 仓库失败"; exit 1; }
+    echo -e "${GREEN}ELRepo 仓库添加成功${NC}"
+    log "ELRepo 仓库添加成功"
 }
 
 # 检查内核是否支持 CPU 频率管理
 check_kernel_cpufreq_support() {
-    [ -d /sys/devices/system/cpu/cpu0/cpufreq ] && echo "yes" || echo "no"
+    if [ -d /sys/devices/system/cpu/cpu0/cpufreq ]; then
+        echo "yes"
+    else
+        echo "no"
+    fi
 }
 
-# 升级内核（仅 CentOS）
-upgrade_kernel() {
-    if [ "$DISTRO" = "centos" ]; then
-        echo -e "${YELLOW}升级内核以支持 CPU 频率管理...${NC}"
-        log "开始升级内核"
-
-        $INSTALL_CMD --enablerepo=elrepo-kernel kernel-ml || { echo -e "${RED}安装新内核失败${NC}"; log "安装新内核失败"; exit 1; }
-        grub2-set-default 0 || { echo -e "${RED}设置默认内核失败${NC}"; log "设置默认内核失败"; exit 1; }
-
-        echo -e "${GREEN}内核升级完成，请重启系统${NC}"
-        log "内核升级完成"
-    else
-        echo -e "${YELLOW}非 CentOS 系统，跳过内核升级${NC}"
+# 检查当前内核版本是否为最新
+check_kernel_version() {
+    CURRENT_KERNEL=$(uname -r)
+    LATEST_KERNEL=$(rpm -qa | grep kernel-ml | sort -V | tail -n 1 | sed 's/kernel-ml-//')
+    if [ -z "$LATEST_KERNEL" ]; then
+        echo -e "${YELLOW}未检测到已安装的新内核${NC}"
+        log "未检测到已安装的新内核"
+        return 1
     fi
+    if [ "$CURRENT_KERNEL" != "$LATEST_KERNEL" ]; then
+        echo -e "${RED}当前运行内核 ($CURRENT_KERNEL) 与最新安装内核 ($LATEST_KERNEL) 不一致${NC}"
+        log "当前运行内核与最新安装内核不一致"
+        return 1
+    else
+        echo -e "${GREEN}当前运行内核 ($CURRENT_KERNEL) 为最新版本${NC}"
+        log "当前运行内核为最新版本"
+        return 0
+    fi
+}
+
+# 升级内核
+upgrade_kernel() {
+    echo -e "${YELLOW}升级内核以支持 CPU 频率管理...${NC}"
+    log "开始升级内核"
+
+    $INSTALL_CMD --enablerepo=elrepo-kernel kernel-ml || { echo -e "${RED}安装新内核失败${NC}"; log "安装新内核失败"; exit 1; }
+    grub2-set-default 0 || { echo -e "${RED}设置默认内核失败${NC}"; log "设置默认内核失败"; exit 1; }
+    grub2-mkconfig -o /boot/grub2/grub.cfg || { echo -e "${RED}更新 GRUB 配置文件失败${NC}"; log "更新 GRUB 配置文件失败"; exit 1; }
+
+    echo -e "${GREEN}内核升级完成，请重启系统${NC}"
+    log "内核升级完成"
 }
 
 # 应用系统优化
@@ -126,11 +135,9 @@ apply_optimizations() {
     log "开始应用优化"
 
     # 备份 sysctl 设置
-    echo -e "${BLUE}备份当前 sysctl 设置到 $BACKUP_FILE${NC}"
     sysctl -a > "$BACKUP_FILE" || { echo -e "${RED}备份 sysctl 设置失败${NC}"; log "备份 sysctl 设置失败"; exit 1; }
 
     # 应用 sysctl 优化
-    echo -e "${BLUE}应用 sysctl 优化...${NC}"
     cat <<EOF > "$SYSCTL_CONF"
 vm.swappiness = 10
 net.core.rmem_max = 26214400
@@ -140,17 +147,12 @@ EOF
 
     # 设置 CPU 频率管理为 performance
     if [ -d /sys/devices/system/cpu ]; then
-        echo -e "${BLUE}设置 CPU 频率管理模式为 performance${NC}"
         for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
             echo performance > "$cpu" 2>/dev/null
         done
-        if [ $? -ne 0 ]; then
-            echo -e "${YELLOW}设置 CPU 频率失败，可能是权限问题或不支持${NC}"
-            log "设置 CPU 频率失败"
-        fi
+        [ $? -ne 0 ] && { echo -e "${YELLOW}设置 CPU 频率失败${NC}"; log "设置 CPU 频率失败"; }
 
         # 创建 systemd 服务
-        echo -e "${BLUE}创建 CPU 优化服务...${NC}"
         cat <<EOF > "$SERVICE_FILE"
 [Unit]
 Description=CPU Optimizer Service
@@ -167,13 +169,7 @@ EOF
         systemctl daemon-reload
         systemctl enable cpu-optimizer.service
         systemctl start cpu-optimizer.service
-        if [ $? -ne 0 ]; then
-            echo -e "${YELLOW}启用 CPU 服务失败，请检查系统日志${NC}"
-            log "启用 CPU 服务失败"
-        else
-            echo -e "${GREEN}CPU 服务启用成功${NC}"
-            log "CPU 服务启用成功"
-        fi
+        [ $? -ne 0 ] && { echo -e "${YELLOW}启用 CPU 服务失败${NC}"; log "启用 CPU 服务失败"; } || { echo -e "${GREEN}CPU 服务启用成功${NC}"; log "CPU 服务启用成功"; }
     fi
     echo -e "${GREEN}优化已应用${NC}"
     log "优化应用完成"
@@ -210,50 +206,47 @@ check_optimizations() {
     echo -e "${YELLOW}检查优化状态...${NC}"
     log "开始检查优化状态"
 
-    # 检查 sysctl 设置
-    echo -e "${BLUE}sysctl 设置:${NC}"
-    if [ -f "$SYSCTL_CONF" ]; then
-        echo -e "${GREEN}sysctl 优化已应用${NC}"
+    check_kernel_version
+    echo -e "${BLUE}CPU 频率支持:${NC}"
+    if [ "$(check_kernel_cpufreq_support)" = "yes" ]; then
+        echo -e "${GREEN}当前内核支持 CPU 频率管理${NC}"
     else
-        echo -e "${RED}sysctl 优化未应用${NC}"
+        echo -e "${RED}当前内核不支持 CPU 频率管理${NC}"
     fi
 
-    # 检查 CPU 频率管理
+    echo -e "${BLUE}sysctl 设置:${NC}"
+    [ -f "$SYSCTL_CONF" ] && echo -e "${GREEN}sysctl 优化已应用${NC}" || echo -e "${RED}sysctl 优化未应用${NC}"
+
     if [ -d /sys/devices/system/cpu ]; then
         governors=$(cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null | sort | uniq)
-        if [ "$governors" = "performance" ]; then
-            echo -e "${GREEN}CPU 频率管理已设置为 performance${NC}"
-        else
-            echo -e "${RED}CPU 频率管理未设置为 performance，当前为: $governors${NC}"
-        fi
-    else
-        echo -e "${YELLOW}无法检测 CPU 频率管理${NC}"
+        [ "$governors" = "performance" ] && echo -e "${GREEN}CPU 频率管理已设置为 performance${NC}" || echo -e "${RED}CPU 频率管理未设置为 performance，当前为: $governors${NC}"
     fi
 
-    # 检查 CPU 优化服务
-    if systemctl is-enabled cpu-optimizer.service >/dev/null 2>&1; then
-        echo -e "${GREEN}CPU 优化服务已启用${NC}"
-    else
-        echo -e "${RED}CPU 优化服务未启用${NC}"
-    fi
+    systemctl is-enabled cpu-optimizer.service >/dev/null 2>&1 && echo -e "${GREEN}CPU 优化服务已启用${NC}" || echo -e "${RED}CPU 优化服务未启用${NC}"
 }
 
 # 主程序
 detect_distro
 install_dependencies
+add_elrepo_repo
 
-if [ "$DISTRO" = "centos" ]; then
-    add_elrepo_repo
-    if [ "$(check_kernel_cpufreq_support)" = "no" ]; then
-        upgrade_kernel
-        echo -e "${RED}请重启系统后再次运行脚本以应用优化${NC}"
-        exit 0
-    fi
+check_kernel_version
+if [ $? -ne 0 ]; then
+    echo -e "${RED}请确保新内核已设置为默认启动项并重启系统${NC}"
+    echo -e "${YELLOW}运行以下命令更新 GRUB 并重启:${NC}"
+    echo "grub2-set-default 0 && grub2-mkconfig -o /boot/grub2/grub.cfg && reboot"
+    exit 1
+fi
+
+if [ "$(check_kernel_cpufreq_support)" = "no" ]; then
+    upgrade_kernel
+    echo -e "${RED}请重启系统后再次运行脚本以应用优化${NC}"
+    exit 0
 fi
 
 while true; do
     echo -e "${BLUE}----------------${NC}"
-    echo -e "${YELLOW}Linux 系统优化工具${NC}"
+    echo -e "${YELLOW}CentOS 系统优化工具${NC}"
     echo -e "${GREEN}1. 检查优化状态${NC}"
     echo -e "${GREEN}2. 应用优化${NC}"
     echo -e "${GREEN}3. 取消优化${NC}"
