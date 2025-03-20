@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# 定义颜色代码，便于输出美化
+# 定义颜色代码
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m'  # 无颜色
+NC='\033[0m' # 无颜色
 
 # 日志文件路径
 LOG_FILE="/var/log/optimizer.log"
@@ -208,7 +208,7 @@ clean_old_kernels() {
     log "旧内核清理完成"
 }
 
-# 提示用户重启
+# 提示用户重启（修改：不退出脚本）
 prompt_reboot() {
     read -p "$(echo -e ${YELLOW}"请重启系统以应用新内核，是否立即重启？ (y/N): "${NC})" answer
     if [[ "$answer" =~ ^[Yy]$ ]]; then
@@ -217,8 +217,8 @@ prompt_reboot() {
         reboot
     else
         echo -e "${YELLOW}请稍后手动重启系统以应用新内核${NC}"
-        log "用户未选择立即重启，退出脚本"
-        exit 0
+        log "用户未选择立即重启，继续运行脚本"
+        # 不退出，继续运行脚本
     fi
 }
 
