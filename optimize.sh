@@ -102,23 +102,26 @@ add_elrepo_repo() {
 
 # 更新内核（使用 kernel-ml）
 update_kernel() {
-    local current_kernel installed_kernels latest_kernel
+    local current_kernel installed_kernels latest_kernel kernel_version
     current_kernel=$(uname -r)
-    installed_kernels=$(rpm -qa | grep '^kernel-ml-' | sort -V)
-
+    # 只获取 kernel-ml 包，排除 kernel-ml-modules 等
+    installed_kernels=$(rpm -qa | grep '^kernel-ml-[0-9]' | sort -V)
+    
     if [ -z "$installed_kernels" ]; then
         echo -e "${YELLOW}未检测到 kernel-ml，正在安装...${NC}"
         log "未检测到 kernel-ml，开始安装新内核"
         $INSTALL_CMD --enablerepo=elrepo-kernel kernel-ml || { echo -e "${RED}安装新内核失败${NC}"; log "安装新内核失败"; exit 1; }
-        latest_kernel=$(rpm -qa | grep '^kernel-ml-' | sort -V | tail -n 1)
-        set_default_kernel "$latest_kernel"
+        latest_kernel=$(rpm -qa | grep '^kernel-ml-[0-9]' | sort -V | tail -n 1)
+        kernel_version=$(echo "$latest_kernel" | sed 's/kernel-ml-//')
+        set_default_kernel "$kernel_version"
         prompt_reboot
     else
         latest_kernel=$(echo "$installed_kernels" | tail -n 1)
-        if [[ "$current_kernel" != *"$latest_kernel"* ]]; then
-            echo -e "${RED}当前内核 ($current_kernel) 不是最新内核 ($latest_kernel)${NC}"
+        kernel_version=$(echo "$latest_kernel" | sed 's/kernel-ml-//')
+        if [[ "$current_kernel" != "$kernel_version" ]]; then
+            echo -e "${RED}当前内核 ($current_kernel) 不是最新内核 ($kernel_version)${NC}"
             log "当前内核与最新内核不一致"
-            set_default_kernel "$latest_kernel"
+            set_default_kernel "$kernel_version"
             prompt_reboot
         else
             echo -e "${GREEN}当前内核 ($current_kernel) 已是最新${NC}"
@@ -130,17 +133,16 @@ update_kernel() {
 
 # 设置默认引导内核
 set_default_kernel() {
-    local kernel_pkg=$1
-    local kernel_version=$(echo "$kernel_pkg" | sed 's/kernel-ml-//')
+    local kernel_version=$1
     grubby --set-default="/boot/vmlinuz-$kernel_version"
     grub2-mkconfig -o /boot/grub2/grub.cfg
-    echo -e "${GREEN}已将 $kernel_pkg 设置为默认引导内核${NC}"
-    log "已将 $kernel_pkg 设置为默认引导内核"
+    echo -e "${GREEN}已将 kernel-ml-$kernel_version 设置为默认引导内核${NC}"
+    log "已将 kernel-ml-$kernel_version 设置为默认引导内核"
 }
 
 # 清理旧内核
 clean_old_kernels() {
-    local installed_kernels=$(rpm -qa | grep '^kernel-ml-' | sort -V)
+    local installed_kernels=$(rpm -qa | grep '^kernel-ml-[0-9]' | sort -V)
     local latest_kernel=$(echo "$installed_kernels" | tail -n 1)
     for pkg in $installed_kernels; do
         if [ "$pkg" != "$latest_kernel" ]; then
@@ -230,10 +232,11 @@ check_optimizations() {
     echo -e "${YELLOW}检查优化状态...${NC}"
     log "开始检查优化状态"
 
-    local current_kernel installed_kernels latest_kernel
+    local current_kernel installed_kernels latest_kernel kernel_version
     current_kernel=$(uname -r)
-    installed_kernels=$(rpm -qa | grep '^kernel-ml-' | sort -V)
+    installed_kernels=$(rpm -qa | grep '^kernel-ml-[0-9]' | sort -V)
     latest_kernel=$(echo "$installed_kernels" | tail -n 1)
+    kernel_version=$(echo "$latest_kernel" | sed 's/kernel-ml-//')
 
     echo -e "${BLUE}当前运行内核:${NC} $current_kernel"
     echo -e "${BLUE}最新安装内核包:${NC} ${latest_kernel:-"未安装 kernel-ml"}"
