@@ -115,20 +115,64 @@ upgrade_kernel() {
     if [ "$DISTRO" = "CentOS 7" ] || [ "$DISTRO" = "CentOS 8+" ]; then
         echo -e "${YELLOW}升级内核以支持 CPU 频率管理...${NC}"
         log "开始升级内核"
-        $INSTALL_CMD --enablerepo=elrepo-kernel kernel-ml || { echo -e "${RED}安装新内核失败${NC}"; log "安装新内核失败"; exit 1; }
+        $INSTALL_CMD --enablerepo=elrepo-kernel kernel-ml || { echo -e "${RED}安装新内核失败${NC}"; log "安装新内核失败"; return 1; }
         grub2-set-default 0
         echo -e "${GREEN}内核升级完成，请重启系统${NC}"
         log "内核升级完成"
     elif [ "$DISTRO" = "Ubuntu" ]; then
         echo -e "${YELLOW}安装 HWE 内核...${NC}"
-        $INSTALL_CMD linux-generic-hwe-$(lsb_release -sr) || { echo -e "${RED}安装 HWE 内核失败${NC}"; log "安装 HWE 内核失败"; exit 1; }
+        $INSTALL_CMD linux-generic-hwe-$(lsb_release -sr) || { echo -e "${RED}安装 HWE 内核失败${NC}"; log "安装 HWE 内核失败"; return 1; }
         echo -e "${GREEN}内核升级完成，请重启系统${NC}"
         log "内核升级完成"
     else
         echo -e "${RED}不支持的发行版，无法自动升级内核${NC}"
         log "不支持的发行版，无法升级内核"
-        exit 1
+        return 1
     fi
+}
+
+# 从源码编译安装内核
+compile_and_install_kernel() {
+    echo -e "${YELLOW}从源码编译安装内核...${NC}"
+    log "开始从源码编译安装内核"
+
+    # 安装编译依赖
+    local deps="gcc make ncurses-devel bison flex libelf-dev openssl-dev"
+    if [ "$DISTRO" = "Ubuntu" ]; then
+        deps="$deps build-essential"
+    elif [ "$DISTRO" = "CentOS 7" ] || [ "$DISTRO" = "CentOS 8+" ]; then
+        deps="$deps elfutils-libelf-devel"
+    fi
+    $INSTALL_CMD $deps || { echo -e "${RED}安装编译依赖失败${NC}"; log "安装编译依赖失败"; exit 1; }
+
+    # 下载最新内核源码
+    local latest_version=$(curl -s https://www.kernel.org | grep -oP 'linux-\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    local kernel_url="https://cdn.kernel.org/pub/linux/kernel/v${latest_version%%.*}.x/linux-${latest_version}.tar.xz"
+    wget -O /usr/src/linux-${latest_version}.tar.xz "$kernel_url" || { echo -e "${RED}下载内核源码失败${NC}"; log "下载内核源码失败"; exit 1; }
+
+    # 解压源码
+    tar -xf /usr/src/linux-${latest_version}.tar.xz -C /usr/src/ || { echo -e "${RED}解压内核源码失败${NC}"; log "解压内核源码失败"; exit 1; }
+
+    # 配置内核
+    cd /usr/src/linux-${latest_version} || { echo -e "${RED}进入内核目录失败${NC}"; log "进入内核目录失败"; exit 1; }
+    make defconfig || { echo -e "${RED}内核配置失败${NC}"; log "内核配置失败"; exit 1; }
+
+    # 编译内核
+    make -j$(nproc) || { echo -e "${RED}编译内核失败${NC}"; log "编译内核失败"; exit 1; }
+
+    # 安装模块和内核
+    make modules_install || { echo -e "${RED}安装内核模块失败${NC}"; log "安装内核模块失败"; exit 1; }
+    make install || { echo -e "${RED}安装内核失败${NC}"; log "安装内核失败"; exit 1; }
+
+    # 更新引导
+    if [ "$DISTRO" = "Ubuntu" ]; then
+        update-grub || { echo -e "${RED}更新 GRUB 失败${NC}"; log "更新 GRUB 失败"; exit 1; }
+    else
+        grub2-mkconfig -o /boot/grub2/grub.cfg || { echo -e "${RED}更新 GRUB 失败${NC}"; log "更新 GRUB 失败"; exit 1; }
+    fi
+
+    echo -e "${GREEN}新内核已安装，请重启系统${NC}"
+    log "新内核安装完成"
 }
 
 # 应用系统优化
@@ -206,12 +250,16 @@ revert_optimizations() {
 
 # 主程序
 detect_distro
-add_elrepo_repo
 install_dependencies
+
+# 尝试添加 ELRepo 仓库（仅 CentOS）
+if [ "$DISTRO" = "CentOS 7" ] || [ "$DISTRO" = "CentOS 8+" ]; then
+    add_elrepo_repo || compile_and_install_kernel
+fi
 
 # 检查内核支持
 if [ "$(check_kernel_cpufreq_support)" = "no" ]; then
-    upgrade_kernel
+    upgrade_kernel || compile_and_install_kernel
     echo -e "${RED}请重启系统后再次运行脚本以应用优化${NC}"
     exit 0
 fi
