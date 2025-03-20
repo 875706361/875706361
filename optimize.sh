@@ -157,9 +157,29 @@ update_kernel_centos() {
 update_kernel_ubuntu() {
     echo -e "${YELLOW}更新 Ubuntu 内核...${NC}"
     log "开始更新 Ubuntu 内核"
-    $INSTALL_CMD linux-image-generic || { echo -e "${RED}安装最新内核失败${NC}"; log "安装最新内核失败"; exit 1; }
-    echo -e "${GREEN}内核更新完成，请重启系统以应用新内核${NC}"
-    prompt_reboot
+    
+    # 更新包索引并安装最新内核
+    $INSTALL_CMD linux-image-generic || { 
+        echo -e "${RED}安装最新内核失败${NC}"; 
+        log "安装最新内核失败"; 
+        exit 1; 
+    }
+
+    # 获取当前运行的内核版本
+    current_kernel=$(uname -r)
+
+    # 获取系统中安装的最新内核版本
+    latest_kernel=$(dpkg -l | grep linux-image | grep -oP 'linux-image-\K[0-9.-]+' | sort -V | tail -n 1)
+
+    # 比较当前内核与最新内核
+    if [ "$latest_kernel" != "$current_kernel" ]; then
+        echo -e "${GREEN}内核更新完成，新内核版本为 $latest_kernel${NC}"
+        log "检测到新内核版本: $latest_kernel"
+        prompt_reboot
+    else
+        echo -e "${GREEN}当前内核 ($current_kernel) 已是最新版本，无需重启${NC}"
+        log "当前内核已是最新版本: $current_kernel"
+    fi
 }
 
 # 设置默认引导内核（CentOS）
@@ -196,8 +216,8 @@ prompt_reboot() {
         log "用户选择立即重启"
         reboot
     else
-        echo -e "${YELLOW}请重启系统后再次运行脚本以继续${NC}"
-        log "用户未选择重启，退出脚本"
+        echo -e "${YELLOW}请稍后手动重启系统以应用新内核${NC}"
+        log "用户未选择立即重启，退出脚本"
         exit 0
     fi
 }
@@ -266,10 +286,16 @@ check_optimizations() {
     echo -e "${YELLOW}检查优化状态...${NC}"
     log "开始检查优化状态"
 
-    local current_kernel
+    local current_kernel latest_kernel
     current_kernel=$(uname -r)
+    if [ "$DISTRO" == "centos" ]; then
+        latest_kernel=$(rpm -qa | grep '^kernel-ml-[0-9]' | sort -V | tail -n 1 | sed 's/kernel-ml-//')
+    elif [ "$DISTRO" == "ubuntu" ]; then
+        latest_kernel=$(dpkg -l | grep linux-image | grep -oP 'linux-image-\K[0-9.-]+' | sort -V | tail -n 1)
+    fi
 
     echo -e "${BLUE}当前运行内核:${NC} $current_kernel"
+    echo -e "${BLUE}最新安装内核:${NC} ${latest_kernel:-"未检测到新内核"}"
 
     echo -e "${BLUE}sysctl 设置:${NC}"
     [ -f "$SYSCTL_CONF" ] && echo -e "${GREEN}sysctl 优化已应用${NC}" || echo -e "${RED}sysctl 优化未应用${NC}"
