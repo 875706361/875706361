@@ -25,7 +25,7 @@ fi
 SYSCTL_CONF="/etc/sysctl.d/99-optimizer.conf"
 SERVICE_FILE="/etc/systemd/system/cpu-optimizer.service"
 
-# 检测系统类型和版本（仅支持 CentOS）
+# 检测系统类型和版本（支持 CentOS 和 Ubuntu）
 detect_distro() {
     if [ -f /etc/os-release ]; then
         . /etc/os-release
@@ -37,22 +37,29 @@ detect_distro() {
         exit 1
     fi
 
-    if [ "$DISTRO" != "centos" ]; then
-        echo -e "${RED}此脚本仅支持 CentOS 系统，检测到: $DISTRO${NC}"
+    if [ "$DISTRO" == "centos" ]; then
+        # CentOS 包管理器配置
+        if [ "${VERSION_ID%%.*}" -ge 8 ]; then
+            PKG_MANAGER="dnf"
+            UPDATE_CMD="dnf update -y"
+            INSTALL_CMD="dnf install -y"
+            REMOVE_CMD="dnf remove -y"
+        else
+            PKG_MANAGER="yum"
+            UPDATE_CMD="yum update -y"
+            INSTALL_CMD="yum install -y"
+            REMOVE_CMD="yum remove -y"
+        fi
+    elif [ "$DISTRO" == "ubuntu" ]; then
+        # Ubuntu 包管理器配置
+        PKG_MANAGER="apt-get"
+        UPDATE_CMD="apt-get update -y"
+        INSTALL_CMD="apt-get install -y"
+        REMOVE_CMD="apt-get remove -y"
+    else
+        echo -e "${RED}此脚本仅支持 CentOS 和 Ubuntu 系统，检测到: $DISTRO${NC}"
         log "不支持的系统类型: $DISTRO"
         exit 1
-    fi
-
-    # 根据 CentOS 版本选择包管理器
-    PKG_MANAGER="yum"
-    UPDATE_CMD="yum update -y"
-    INSTALL_CMD="yum install -y"
-    REMOVE_CMD="yum remove -y"
-    if [ "${VERSION_ID%%.*}" -ge 8 ]; then
-        PKG_MANAGER="dnf"
-        UPDATE_CMD="dnf update -y"
-        INSTALL_CMD="dnf install -y"
-        REMOVE_CMD="dnf remove -y"
     fi
     echo -e "${BLUE}检测到系统: $DISTRO $VERSION_ID${NC}"
     log "检测到系统: $DISTRO $VERSION_ID"
@@ -63,13 +70,20 @@ install_dependencies() {
     echo -e "${YELLOW}安装依赖...${NC}"
     log "开始安装依赖"
     $UPDATE_CMD || { echo -e "${RED}更新包索引失败${NC}"; log "更新包索引失败"; exit 1; }
-    $INSTALL_CMD procps systemd cpupowerutils grub2-tools || { echo -e "${RED}安装依赖失败${NC}"; log "安装依赖失败"; exit 1; }
+    if [ "$DISTRO" == "centos" ]; then
+        $INSTALL_CMD procps systemd cpupowerutils grub2-tools || { echo -e "${RED}安装依赖失败${NC}"; log "安装依赖失败"; exit 1; }
+    elif [ "$DISTRO" == "ubuntu" ]; then
+        $INSTALL_CMD procps systemd cpufrequtils || { echo -e "${RED}安装依赖失败${NC}"; log "安装依赖失败"; exit 1; }
+    fi
     echo -e "${GREEN}依赖安装完成${NC}"
     log "依赖安装完成"
 }
 
-# 添加 ELRepo 仓库
+# 添加 ELRepo 仓库（仅 CentOS）
 add_elrepo_repo() {
+    if [ "$DISTRO" != "centos" ]; then
+        return
+    fi
     echo -e "${YELLOW}检测 ELRepo 仓库...${NC}"
     log "检测 ELRepo 仓库"
     if [ -f "/etc/yum.repos.d/elrepo.repo" ]; then
@@ -100,11 +114,19 @@ add_elrepo_repo() {
     fi
 }
 
-# 更新内核（使用 kernel-ml）
+# 更新内核
 update_kernel() {
+    if [ "$DISTRO" == "centos" ]; then
+        update_kernel_centos
+    elif [ "$DISTRO" == "ubuntu" ]; then
+        update_kernel_ubuntu
+    fi
+}
+
+# CentOS 内核更新
+update_kernel_centos() {
     local current_kernel installed_kernels latest_kernel kernel_version
     current_kernel=$(uname -r)
-    # 只获取 kernel-ml 包，排除 kernel-ml-modules 等
     installed_kernels=$(rpm -qa | grep '^kernel-ml-[0-9]' | sort -V)
     
     if [ -z "$installed_kernels" ]; then
@@ -131,7 +153,16 @@ update_kernel() {
     fi
 }
 
-# 设置默认引导内核
+# Ubuntu 内核更新
+update_kernel_ubuntu() {
+    echo -e "${YELLOW}更新 Ubuntu 内核...${NC}"
+    log "开始更新 Ubuntu 内核"
+    $INSTALL_CMD linux-image-generic || { echo -e "${RED}安装最新内核失败${NC}"; log "安装最新内核失败"; exit 1; }
+    echo -e "${GREEN}内核更新完成，请重启系统以应用新内核${NC}"
+    prompt_reboot
+}
+
+# 设置默认引导内核（CentOS）
 set_default_kernel() {
     local kernel_version=$1
     grubby --set-default="/boot/vmlinuz-$kernel_version"
@@ -140,8 +171,11 @@ set_default_kernel() {
     log "已将 kernel-ml-$kernel_version 设置为默认引导内核"
 }
 
-# 清理旧内核
+# 清理旧内核（CentOS）
 clean_old_kernels() {
+    if [ "$DISTRO" != "centos" ]; then
+        return
+    fi
     local installed_kernels=$(rpm -qa | grep '^kernel-ml-[0-9]' | sort -V)
     local latest_kernel=$(echo "$installed_kernels" | tail -n 1)
     for pkg in $installed_kernels; do
@@ -232,14 +266,10 @@ check_optimizations() {
     echo -e "${YELLOW}检查优化状态...${NC}"
     log "开始检查优化状态"
 
-    local current_kernel installed_kernels latest_kernel kernel_version
+    local current_kernel
     current_kernel=$(uname -r)
-    installed_kernels=$(rpm -qa | grep '^kernel-ml-[0-9]' | sort -V)
-    latest_kernel=$(echo "$installed_kernels" | tail -n 1)
-    kernel_version=$(echo "$latest_kernel" | sed 's/kernel-ml-//')
 
     echo -e "${BLUE}当前运行内核:${NC} $current_kernel"
-    echo -e "${BLUE}最新安装内核包:${NC} ${latest_kernel:-"未安装 kernel-ml"}"
 
     echo -e "${BLUE}sysctl 设置:${NC}"
     [ -f "$SYSCTL_CONF" ] && echo -e "${GREEN}sysctl 优化已应用${NC}" || echo -e "${RED}sysctl 优化未应用${NC}"
@@ -254,13 +284,15 @@ check_optimizations() {
 # 主程序入口
 detect_distro
 install_dependencies
-add_elrepo_repo
+if [ "$DISTRO" == "centos" ]; then
+    add_elrepo_repo
+fi
 update_kernel
 
 # 交互式菜单
 while true; do
     echo -e "${BLUE}----------------${NC}"
-    echo -e "${YELLOW}CentOS 系统优化工具${NC}"
+    echo -e "${YELLOW}$DISTRO 系统优化工具${NC}"
     echo -e "${GREEN}1. 检查优化状态${NC}"
     echo -e "${GREEN}2. 应用系统优化${NC}"
     echo -e "${GREEN}3. 取消优化${NC}"
