@@ -169,7 +169,7 @@ update_kernel_ubuntu() {
     current_kernel=$(uname -r)
 
     # 获取系统中安装的最新内核版本
-    latest_kernel=$(dpkg -l | grep linux-image | grep -oP 'linux-image-\K[0-9.-]+' | sort -V | tail -n 1)
+    latest_kernel=$(dpkg -l | grep linux-image | awk '{print $2}' | sed 's/linux-image-//' | sort -V | tail -n 1)
 
     # 比较当前内核与最新内核
     if [ "$latest_kernel" != "$current_kernel" ]; then
@@ -208,7 +208,7 @@ clean_old_kernels() {
     log "旧内核清理完成"
 }
 
-# 提示用户重启（修改：不退出脚本）
+# 提示用户重启（不退出脚本）
 prompt_reboot() {
     read -p "$(echo -e ${YELLOW}"请重启系统以应用新内核，是否立即重启？ (y/N): "${NC})" answer
     if [[ "$answer" =~ ^[Yy]$ ]]; then
@@ -218,20 +218,50 @@ prompt_reboot() {
     else
         echo -e "${YELLOW}请稍后手动重启系统以应用新内核${NC}"
         log "用户未选择立即重启，继续运行脚本"
-        # 不退出，继续运行脚本
     fi
 }
 
-# 应用系统优化
+# 安装魔改版BBR（仅 Ubuntu）
+install_bbr_plus() {
+    if [ "$DISTRO" != "ubuntu" ]; then
+        echo -e "${RED}魔改版BBR 仅支持 Ubuntu 系统${NC}"
+        log "尝试在非 Ubuntu 系统上安装魔改版BBR"
+        return
+    fi
+    echo -e "${YELLOW}正在安装魔改版BBR...${NC}"
+    log "开始安装魔改版BBR"
+    wget -O bbr_plus.sh "https://raw.githubusercontent.com/moeelf/elf/master/bbr_plus.sh" || { 
+        echo -e "${RED}下载魔改版BBR脚本失败${NC}"; 
+        log "下载魔改版BBR脚本失败"; 
+        return 1; 
+    }
+    chmod +x bbr_plus.sh
+    ./bbr_plus.sh
+    echo -e "${GREEN}魔改版BBR安装脚本已运行完成，请根据提示选择选项 3 安装魔改版BBR${NC}"
+    log "魔改版BBR安装脚本运行完成"
+    rm -f bbr_plus.sh
+}
+
+# 应用系统优化（包括 TCP 网络超级优化）
 apply_optimizations() {
     echo -e "${YELLOW}应用系统优化...${NC}"
     log "开始应用系统优化"
 
-    # 写入 sysctl 优化参数
+    # 写入 sysctl 优化参数，包括 TCP 网络优化
     cat <<EOF > "$SYSCTL_CONF"
 vm.swappiness = 10
 net.core.rmem_max = 26214400
 net.core.wmem_max = 26214400
+net.core.rmem_default = 262144
+net.core.wmem_default = 262144
+net.core.netdev_max_backlog = 5000
+net.core.somaxconn = 1024
+net.ipv4.tcp_rmem = 4096 87380 174760
+net.ipv4.tcp_wmem = 4096 65536 131072
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_sack = 1
+net.ipv4.tcp_timestamps = 1
+net.ipv4.tcp_window_scaling = 1
 EOF
     sysctl -p "$SYSCTL_CONF" >/dev/null 2>&1
 
@@ -291,7 +321,7 @@ check_optimizations() {
     if [ "$DISTRO" == "centos" ]; then
         latest_kernel=$(rpm -qa | grep '^kernel-ml-[0-9]' | sort -V | tail -n 1 | sed 's/kernel-ml-//')
     elif [ "$DISTRO" == "ubuntu" ]; then
-        latest_kernel=$(dpkg -l | grep linux-image | grep -oP 'linux-image-\K[0-9.-]+' | sort -V | tail -n 1)
+        latest_kernel=$(dpkg -l | grep linux-image | awk '{print $2}' | sed 's/linux-image-//' | sort -V | tail -n 1)
     fi
 
     echo -e "${BLUE}当前运行内核:${NC} $current_kernel"
@@ -322,15 +352,17 @@ while true; do
     echo -e "${GREEN}1. 检查优化状态${NC}"
     echo -e "${GREEN}2. 应用系统优化${NC}"
     echo -e "${GREEN}3. 取消优化${NC}"
-    echo -e "${GREEN}4. 退出${NC}"
+    echo -e "${GREEN}4. 安装魔改版BBR（仅 Ubuntu）${NC}"
+    echo -e "${GREEN}5. 退出${NC}"
     echo -e "${BLUE}----------------${NC}"
-    read -p "请选择选项 (1-4): " choice
+    read -p "请选择选项 (1-5): " choice
 
     case $choice in
         1) check_optimizations ;;
         2) apply_optimizations ;;
         3) revert_optimizations ;;
-        4) echo -e "${GREEN}退出脚本${NC}"; log "用户退出脚本"; exit 0 ;;
-        *) echo -e "${RED}无效选项，请输入 1-4${NC}" ;;
+        4) install_bbr_plus ;;
+        5) echo -e "${GREEN}退出脚本${NC}"; log "用户退出脚本"; exit 0 ;;
+        *) echo -e "${RED}无效选项，请输入 1-5${NC}" ;;
     esac
 done
