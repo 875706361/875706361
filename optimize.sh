@@ -141,7 +141,13 @@ EOF
     # 设置 CPU 频率管理为 performance
     if [ -d /sys/devices/system/cpu ]; then
         echo -e "${BLUE}设置 CPU 频率管理模式为 performance${NC}"
-        echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null 2>&1 || { echo -e "${YELLOW}设置 CPU 频率失败${NC}"; log "设置 CPU 频率失败"; }
+        for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+            echo performance > "$cpu" 2>/dev/null
+        done
+        if [ $? -ne 0 ]; then
+            echo -e "${YELLOW}设置 CPU 频率失败，可能是权限问题或不支持${NC}"
+            log "设置 CPU 频率失败"
+        fi
 
         # 创建 systemd 服务
         echo -e "${BLUE}创建 CPU 优化服务...${NC}"
@@ -152,14 +158,22 @@ After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c "echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor"
+ExecStart=/bin/bash -c "for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > \$cpu; done"
 RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
-        systemctl enable cpu-optimizer.service && systemctl start cpu-optimizer.service || { echo -e "${YELLOW}启用 CPU 服务失败${NC}"; log "启用 CPU 服务失败"; }
+        systemctl enable cpu-optimizer.service
+        systemctl start cpu-optimizer.service
+        if [ $? -ne 0 ]; then
+            echo -e "${YELLOW}启用 CPU 服务失败，请检查系统日志${NC}"
+            log "启用 CPU 服务失败"
+        else
+            echo -e "${GREEN}CPU 服务启用成功${NC}"
+            log "CPU 服务启用成功"
+        fi
     fi
     echo -e "${GREEN}优化已应用${NC}"
     log "优化应用完成"
@@ -191,6 +205,39 @@ revert_optimizations() {
     log "恢复完成"
 }
 
+# 检查优化状态
+check_optimizations() {
+    echo -e "${YELLOW}检查优化状态...${NC}"
+    log "开始检查优化状态"
+
+    # 检查 sysctl 设置
+    echo -e "${BLUE}sysctl 设置:${NC}"
+    if [ -f "$SYSCTL_CONF" ]; then
+        echo -e "${GREEN}sysctl 优化已应用${NC}"
+    else
+        echo -e "${RED}sysctl 优化未应用${NC}"
+    fi
+
+    # 检查 CPU 频率管理
+    if [ -d /sys/devices/system/cpu ]; then
+        governors=$(cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null | sort | uniq)
+        if [ "$governors" = "performance" ]; then
+            echo -e "${GREEN}CPU 频率管理已设置为 performance${NC}"
+        else
+            echo -e "${RED}CPU 频率管理未设置为 performance，当前为: $governors${NC}"
+        fi
+    else
+        echo -e "${YELLOW}无法检测 CPU 频率管理${NC}"
+    fi
+
+    # 检查 CPU 优化服务
+    if systemctl is-enabled cpu-optimizer.service >/dev/null 2>&1; then
+        echo -e "${GREEN}CPU 优化服务已启用${NC}"
+    else
+        echo -e "${RED}CPU 优化服务未启用${NC}"
+    fi
+}
+
 # 主程序
 detect_distro
 install_dependencies
@@ -207,16 +254,18 @@ fi
 while true; do
     echo -e "${BLUE}----------------${NC}"
     echo -e "${YELLOW}Linux 系统优化工具${NC}"
-    echo -e "${GREEN}1. 应用优化${NC}"
-    echo -e "${GREEN}2. 取消优化${NC}"
-    echo -e "${GREEN}3. 退出${NC}"
+    echo -e "${GREEN}1. 检查优化状态${NC}"
+    echo -e "${GREEN}2. 应用优化${NC}"
+    echo -e "${GREEN}3. 取消优化${NC}"
+    echo -e "${GREEN}4. 退出${NC}"
     echo -e "${BLUE}----------------${NC}"
-    read -p "请选择选项 (1-3): " choice
+    read -p "请选择选项 (1-4): " choice
 
     case $choice in
-        1) apply_optimizations ;;
-        2) revert_optimizations ;;
-        3) echo -e "${GREEN}退出脚本${NC}"; log "脚本退出"; exit 0 ;;
-        *) echo -e "${RED}无效选项，请输入 1-3${NC}" ;;
+        1) check_optimizations ;;
+        2) apply_optimizations ;;
+        3) revert_optimizations ;;
+        4) echo -e "${GREEN}退出脚本${NC}"; log "脚本退出"; exit 0 ;;
+        *) echo -e "${RED}无效选项，请输入 1-4${NC}" ;;
     esac
 done
