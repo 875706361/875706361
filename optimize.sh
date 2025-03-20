@@ -6,7 +6,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'  # 无颜色
 
-# 日志文件
+# 日志文件路径
 LOG_FILE="/var/log/optimizer.log"
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
@@ -41,7 +41,7 @@ detect_distro() {
         exit 1
     fi
 
-    # 根据 CentOS 版本选择包管理器及相关命令
+    # 根据 CentOS 版本选择包管理器及命令
     PKG_MANAGER="yum"
     UPDATE_CMD="yum update -y"
     INSTALL_CMD="yum install -y"
@@ -66,7 +66,7 @@ install_dependencies() {
     log "依赖安装完成"
 }
 
-# 检测 ELRepo 仓库是否已添加；如果未添加则进行添加
+# 检测 ELRepo 仓库是否已添加；若未添加则自动添加
 add_elrepo_repo() {
     echo -e "${YELLOW}检测 ELRepo 仓库...${NC}"
     log "检测 ELRepo 仓库"
@@ -113,7 +113,7 @@ update_kernel() {
         echo -e "${GREEN}新内核安装成功，更新 GRUB 配置...${NC}"
         grub2-set-default 0
         grub2-mkconfig -o /boot/grub2/grub.cfg
-        # 创建标识文件，提示重启（避免后续重复操作）
+        # 创建标识文件，提示重启以避免重复操作
         touch "$FLAG_FILE"
         log "新内核安装成功，等待重启以启用新内核"
         read -p "$(echo -e ${YELLOW}"请重启系统以使用新内核，是否立即重启？ (y/N): "${NC})" answer
@@ -131,7 +131,7 @@ update_kernel() {
         latest_kernel=$(echo "$installed_kernels" | sed 's/kernel-ml-//' | sort -V | tail -n 1)
         log "当前运行内核: $current_kernel"
         log "最新安装内核: $latest_kernel"
-        # 如果当前运行内核与最新内核不一致，则说明新内核安装后未重启生效
+        # 如果当前运行内核与最新内核不一致，则说明新内核安装后尚未重启生效
         if [[ "$current_kernel" != "$latest_kernel" ]]; then
             echo -e "${RED}当前运行内核 ($current_kernel) 与最新安装内核 ($latest_kernel) 不一致${NC}"
             log "当前运行内核与最新内核不一致"
@@ -185,12 +185,12 @@ net.core.wmem_max = 26214400
 EOF
     sysctl -p "$SYSCTL_CONF" >/dev/null 2>&1
 
-    # 设置所有 CPU 的频率管理为 performance
+    # 将所有 CPU 的频率管理设置为 performance
     if [ -d /sys/devices/system/cpu ]; then
         for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
             echo performance > "$cpu" 2>/dev/null
         done
-        # 创建 systemd 服务，确保重启后也生效
+        # 创建 systemd 服务，确保重启后同样生效
         cat <<EOF > "$SERVICE_FILE"
 [Unit]
 Description=CPU Optimizer Service
