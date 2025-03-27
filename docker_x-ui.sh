@@ -10,7 +10,7 @@ NC='\033[0m' # 无色
 CONTAINER_NAME="x-ui"
 DB_DIR="/etc/x-ui"
 CERT_DIR="$PWD/cert"
-BACKUP_URL="https://github.com/875706361/875706361/releases/download/0.3.44/docker_x-ui.tar"
+BACKUP_URL="https://github.com/875706361/x-ui_FranzKafkaYu/releases/download/0.3.4.4/docker_x-ui.tar"
 BACKUP_FILE="/root/docker_x-ui.tar"
 
 # 检测 Linux 发行版
