@@ -30,6 +30,46 @@ install_dependencies() {
     echo -e "${GREEN}软件包安装完成${NC}"
 }
 
+# 卸载所有配置及软件
+uninstall_all() {
+    echo -e "${YELLOW}正在卸载所有配置及软件...${NC}"
+    if [ -f /etc/redhat-release ]; then
+        # CentOS 系统
+        systemctl stop nftables
+        systemctl disable nftables
+        yum remove -y nftables net-tools iproute2 awk grep coreutils
+        rm -f /etc/nftables.conf
+    elif [ -f /etc/lsb-release ]; then
+        # Ubuntu 系统
+        systemctl stop nftables
+        systemctl disable nftables
+        apt-get remove -y nftables net-tools iproute2 awk grep coreutils
+        apt-get autoremove -y
+        rm -f /etc/nftables.conf
+    fi
+    echo -e "${GREEN}所有配置及软件已卸载${NC}"
+    exit 0
+}
+
+# 保存并应用规则
+save_and_apply() {
+    echo -e "${YELLOW}正在保存并应用规则...${NC}"
+    nft list ruleset > /etc/nftables.conf
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}规则已保存到 /etc/nftables.conf${NC}"
+        echo -e "${YELLOW}正在重启 nftables 服务...${NC}"
+        systemctl restart nftables
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}nftables 服务已重启，规则已应用${NC}"
+        else
+            echo -e "${RED}重启 nftables 服务失败${NC}"
+        fi
+    else
+        echo -e "${RED}保存规则失败${NC}"
+    fi
+    echo ""
+}
+
 # 查看当前 nftables 规则
 view_rules() {
     echo -e "${BLUE}当前 nftables 规则:${NC}"
@@ -65,7 +105,7 @@ delete_tcp_rule() {
     echo ""
 }
 
-# 新增 TCP 端口规则
+# 新增 TCP 端口规则并限制连接数
 add_tcp_rule() {
     echo -e "${YELLOW}请输入要添加的 TCP 端口号:${NC}"
     read port
@@ -73,16 +113,20 @@ add_tcp_rule() {
         echo -e "${RED}请输入有效的端口号${NC}"
         return
     fi
-    echo -e "${YELLOW}正在添加端口 $port 的规则...${NC}"
-    # 检查 table 和 chain 是否存在，不存在则创建
+    echo -e "${YELLOW}请输入最大 TCP 连接数:${NC}"
+    read limit
+    if [[ ! $limit =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}请输入有效的连接数${NC}"
+        return
+    fi
+    echo -e "${YELLOW}正在添加端口 $port 的规则，限制连接数为 $limit...${NC}"
     nft list table filter >/dev/null 2>&1 || nft add table filter
     nft list chain filter input >/dev/null 2>&1 || nft add chain filter input { type filter hook input priority 0 \; }
     nft list chain filter output >/dev/null 2>&1 || nft add chain filter output { type filter hook output priority 0 \; }
-    # 添加规则
-    nft add rule filter input tcp dport "$port" accept
-    nft add rule filter output tcp sport "$port" accept
+    nft add rule filter input tcp dport "$port" ct count "$limit" accept
+    nft add rule filter output tcp sport "$port" ct count "$limit" accept
     if [ $? -eq 0 ]; then
-        echo -e "${GREEN}端口 $port 的规则已添加${NC}"
+        echo -e "${GREEN}端口 $port 的规则已添加，最大连接数限制为 $limit${NC}"
     else
         echo -e "${RED}添加端口 $port 规则失败${NC}"
     fi
@@ -97,9 +141,11 @@ main_menu() {
         echo -e "${GREEN}1. 查看当前 nftables 规则${NC}"
         echo -e "${GREEN}2. 查看 TCP 连接数${NC}"
         echo -e "${GREEN}3. 删除 TCP 端口规则${NC}"
-        echo -e "${GREEN}4. 新增 TCP 端口规则${NC}"
-        echo -e "${GREEN}5. 退出${NC}"
-        echo -e "${YELLOW}请选择操作 (1-5):${NC}"
+        echo -e "${GREEN}4. 新增 TCP 端口规则并限制连接数${NC}"
+        echo -e "${GREEN}5. 保存并应用规则${NC}"
+        echo -e "${GREEN}6. 卸载所有配置及软件${NC}"
+        echo -e "${GREEN}7. 退出${NC}"
+        echo -e "${YELLOW}请选择操作 (1-7):${NC}"
         read choice
 
         case $choice in
@@ -107,8 +153,10 @@ main_menu() {
             2) view_tcp_connections ;;
             3) delete_tcp_rule ;;
             4) add_tcp_rule ;;
-            5) echo -e "${GREEN}退出程序${NC}"; exit 0 ;;
-            *) echo -e "${RED}无效的选择，请输入 1-5${NC}" ;;
+            5) save_and_apply ;;
+            6) uninstall_all ;;
+            7) echo -e "${GREEN}退出程序${NC}"; exit 0 ;;
+            *) echo -e "${RED}无效的选择，请输入 1-7${NC}" ;;
         esac
         echo -e "${YELLOW}按 Enter 键继续...${NC}"
         read
