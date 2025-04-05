@@ -223,4 +223,4 @@ while true; do
 done
 
 # 如果需要自动安装 nftables，可以取消下面的注释
-# install_nftables
+install_nftables
