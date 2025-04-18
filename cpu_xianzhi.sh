@@ -1,5 +1,13 @@
 #!/bin/bash
 
+# 颜色定义
+GREEN="\033[32m"
+RED="\033[31m"
+YELLOW="\033[33m"
+BLUE="\033[36m"
+RESET="\033[0m"
+BOLD="\033[1m"
+
 LOG_FILE="/var/log/secure_env_setup.log"
 CPU_LIMIT_SCRIPT="/usr/local/bin/cpu_limit.sh"
 CPU_LIMIT_SERVICE="/etc/systemd/system/cpu_limit.service"
@@ -15,7 +23,7 @@ detect_os() {
         OS_ID=$ID
         OS_LIKE=$ID_LIKE
     else
-        log "无法识别的系统，不支持自动安全配置"
+        echo -e "${RED}无法识别的系统，不支持自动安全配置${RESET}"
         exit 1
     fi
 }
@@ -23,6 +31,7 @@ detect_os() {
 inst() {
     for pkg in "$@"; do
         if ! command -v $pkg &>/dev/null; then
+            echo -e "${YELLOW}正在安装 $pkg ...${RESET}"
             log "正在安装 $pkg ..."
             case "$OS_ID" in
                 ubuntu|debian)
@@ -39,21 +48,25 @@ inst() {
                         yum install -y epel-release
                         yum install -y $pkg
                     else
-                        log "未知系统：手动安装 $pkg"
+                        echo -e "${RED}未知系统：请手动安装 $pkg${RESET}"
+                        log "未知系统：请手动安装 $pkg"
                     fi
                 ;;
             esac
         else
+            echo -e "${GREEN}$pkg 已安装${RESET}"
             log "$pkg 已安装"
         fi
     done
 }
 
 setup_firewall_openall() {
+    echo -e "${YELLOW}配置防火墙为全部端口开放...${RESET}"
+    log "配置防火墙(全部端口开放)"
     case "$OS_ID" in
         ubuntu|debian)
             inst ufw
-            log "重置并开放所有端口(UFW)"
+            echo -e "${BLUE}重置并开放所有端口(UFW)...${RESET}"
             ufw --force reset
             ufw default allow incoming
             ufw default allow outgoing
@@ -62,7 +75,7 @@ setup_firewall_openall() {
         centos|almalinux|rocky|rhel)
             inst firewalld
             systemctl enable firewalld --now
-            log "firewalld切换到trusted（全部端口开放）"
+            echo -e "${BLUE}firewalld切换到trusted（全部端口开放）...${RESET}"
             firewall-cmd --set-default-zone=trusted
             firewall-cmd --reload
             ;;
@@ -81,9 +94,12 @@ setup_firewall_openall() {
             fi
             ;;
     esac
+    echo -e "${GREEN}防火墙已全部开放！${RESET}"
 }
 
 install_security_tools() {
+    echo -e "${YELLOW}安装安全工具...${RESET}"
+    log "安装安全工具"
     inst fail2ban
     inst rkhunter
     inst chkrootkit
@@ -92,25 +108,31 @@ install_security_tools() {
 
     if systemctl list-unit-files | grep -q fail2ban; then
         systemctl enable fail2ban --now
+        echo -e "${GREEN}fail2ban 已启动${RESET}"
         log "fail2ban 已启动"
     fi
 
     if command -v freshclam &>/dev/null; then
         freshclam
+        echo -e "${GREEN}ClamAV 病毒库已更新${RESET}"
         log "ClamAV 病毒库已更新"
     fi
 
     if systemctl list-unit-files | grep -q auditd; then
         systemctl enable auditd --now
+        echo -e "${GREEN}auditd 已启动${RESET}"
         log "auditd 已启动"
     fi
+    echo -e "${GREEN}安全工具安装完成！${RESET}"
 }
 
 install_cpulimit() {
+    echo -e "${YELLOW}安装cpulimit...${RESET}"
     inst cpulimit
 }
 
 create_cpu_limit_script() {
+    echo -e "${YELLOW}创建CPU限制监控脚本...${RESET}"
     log "创建CPU限制监控脚本..."
     cat > "$CPU_LIMIT_SCRIPT" <<'EOF'
 #!/bin/bash
@@ -172,10 +194,12 @@ done
 EOF
 
     chmod +x "$CPU_LIMIT_SCRIPT"
+    echo -e "${GREEN}CPU限制脚本已创建：$CPU_LIMIT_SCRIPT${RESET}"
     log "CPU限制脚本已创建：$CPU_LIMIT_SCRIPT"
 }
 
 create_cpu_limit_service() {
+    echo -e "${YELLOW}创建CPU限制systemd服务...${RESET}"
     log "创建CPU限制systemd服务..."
     cat > "$CPU_LIMIT_SERVICE" <<EOF
 [Unit]
@@ -197,15 +221,18 @@ EOF
     systemctl daemon-reload
     systemctl enable cpu_limit.service
     systemctl restart cpu_limit.service
+    echo -e "${GREEN}CPU限制服务已启用并自启！${RESET}"
     log "CPU限制服务已启用并自启"
 }
 
 remove_cpu_limit() {
+    echo -e "${YELLOW}正在卸载CPU限制服务和脚本...${RESET}"
     systemctl stop cpu_limit.service 2>/dev/null
     systemctl disable cpu_limit.service 2>/dev/null
     rm -f "$CPU_LIMIT_SERVICE"
     rm -f "$CPU_LIMIT_SCRIPT"
     systemctl daemon-reload
+    echo -e "${GREEN}CPU限制服务与脚本已卸载${RESET}"
     log "CPU限制服务与脚本已卸载"
 }
 
@@ -213,44 +240,41 @@ main_menu() {
     detect_os
     while true; do
         clear
-        echo "=============================="
-        echo "  VPS安全环境&CPU限制管理器"
-        echo "=============================="
-        echo "1. 安装常用安全工具"
-        echo "2. 配置防火墙（全部端口开放）"
-        echo "3. 部署并启用CPU限制服务"
-        echo "4. 卸载CPU限制服务"
-        echo "5. 退出"
-        echo "------------------------------"
-        read -p "请选择操作 [1-5]：" choice
+        echo -e "${BOLD}${BLUE}=============================="
+        echo -e "  VPS安全环境 & CPU限制管理器"
+        echo -e "==============================${RESET}"
+        echo -e "${YELLOW}1. 安装常用安全工具${RESET}"
+        echo -e "${YELLOW}2. 配置防火墙（全部端口开放）${RESET}"
+        echo -e "${YELLOW}3. 部署并启用CPU限制服务${RESET}"
+        echo -e "${YELLOW}4. 卸载CPU限制服务${RESET}"
+        echo -e "${YELLOW}5. 退出${RESET}"
+        echo -e "${BLUE}------------------------------${RESET}"
+        read -p "$(echo -e "${BOLD}请选择操作 [1-5]：${RESET}")" choice
         case "$choice" in
             1)
-                log "安装安全工具"
                 install_security_tools
-                echo "已完成，回车继续..." ; read
+                echo -e "${GREEN}已完成，按回车继续...${RESET}" ; read
                 ;;
             2)
-                log "配置防火墙(全部端口开放)"
                 setup_firewall_openall
-                echo "已完成，回车继续..." ; read
+                echo -e "${GREEN}已完成，按回车继续...${RESET}" ; read
                 ;;
             3)
-                log "安装cpulimit及部署CPU限制服务"
                 install_cpulimit
                 create_cpu_limit_script
                 create_cpu_limit_service
-                echo "已完成，回车继续..." ; read
+                echo -e "${GREEN}已完成，按回车继续...${RESET}" ; read
                 ;;
             4)
                 remove_cpu_limit
-                echo "已完成，回车继续..." ; read
+                echo -e "${GREEN}已完成，按回车继续...${RESET}" ; read
                 ;;
             5)
-                echo "退出。日志见：$LOG_FILE"
+                echo -e "${BOLD}${BLUE}退出。日志见：$LOG_FILE${RESET}"
                 exit 0
                 ;;
             *)
-                echo "请输入1-5之间的数字！"
+                echo -e "${RED}请输入1-5之间的数字！${RESET}"
                 sleep 1
                 ;;
         esac
