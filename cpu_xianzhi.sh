@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# 颜色定义
+# 彩色定义
 GREEN="\033[32m"
 RED="\033[31m"
 YELLOW="\033[33m"
@@ -97,33 +97,132 @@ setup_firewall_openall() {
     echo -e "${GREEN}防火墙已全部开放！${RESET}"
 }
 
-install_security_tools() {
-    echo -e "${YELLOW}安装安全工具...${RESET}"
-    log "安装安全工具"
+install_full_fail2ban() {
+    echo -e "${YELLOW}安装并全面配置fail2ban各类安全防御...${RESET}"
+    log "安装并全面配置fail2ban"
+
     inst fail2ban
-    inst rkhunter
-    inst chkrootkit
-    inst auditd
-    inst clamav
 
-    if systemctl list-unit-files | grep -q fail2ban; then
-        systemctl enable fail2ban --now
-        echo -e "${GREEN}fail2ban 已启动${RESET}"
-        log "fail2ban 已启动"
+    # 生成全功能 jail.local
+    FJB_CONF="/etc/fail2ban/jail.local"
+    cat > "$FJB_CONF" <<EOF
+[DEFAULT]
+ignoreip = 127.0.0.1/8
+bantime  = 3600
+findtime  = 600
+maxretry = 5
+backend = systemd
+destemail = root@localhost
+sender = fail2ban@yourdomain.local
+mta = sendmail
+action = %(action_mwl)s
+
+[sshd]
+enabled = true
+port    = ssh
+logpath = %(sshd_log)s
+
+[systemd-logind]
+enabled = true
+port = ssh
+logpath = /var/log/auth.log
+
+# FTP/SMTP/WEB等服务，根据实际开启
+[vsftpd]
+enabled = true
+port    = ftp,ftp-data,ftps,ftps-data
+logpath = /var/log/vsftpd.log
+
+[proftpd]
+enabled = false
+port    = ftp,ftp-data,ftps,ftps-data
+logpath = /var/log/proftpd/proftpd.log
+
+[postfix]
+enabled = true
+port    = smtp,ssmtp,submission,imap2,imap3,imaps,pop3,pop3s
+logpath = /var/log/mail.log
+
+[dovecot]
+enabled = true
+port    = pop3,pop3s,imap,imaps
+logpath = /var/log/mail.log
+
+[nginx-http-auth]
+enabled = true
+filter  = nginx-http-auth
+port    = http,https
+logpath = /var/log/nginx/error.log
+
+[apache-auth]
+enabled = true
+port    = http,https
+logpath = /var/log/apache*/error.log
+
+[apache-badbots]
+enabled  = true
+port     = http,https
+logpath  = /var/log/apache*/access.log
+
+[apache-noscript]
+enabled = true
+port    = http,https
+logpath = /var/log/apache*/error.log
+
+[apache-overflows]
+enabled = true
+port    = http,https
+logpath = /var/log/apache*/error.log
+
+[sshd-ddos]
+enabled = true
+port    = ssh
+logpath = %(sshd_log)s
+
+# 本地登录爆破防御
+[login]
+enabled = true
+filter = pam-generic
+action = %(action_mwl)s
+logpath = /var/log/auth.log
+maxretry = 5
+
+# portscan防御（需iptables支持）
+[portscan]
+enabled  = true
+filter   = portscan
+logpath  = /var/log/auth.log
+maxretry = 2
+bantime  = 86400
+
+EOF
+
+    # 生成 nginx-http-auth 过滤器（如未自带）
+    if [ ! -f /etc/fail2ban/filter.d/nginx-http-auth.conf ]; then
+    cat > /etc/fail2ban/filter.d/nginx-http-auth.conf <<'EOL'
+[Definition]
+failregex = no user/password was provided for basic authentication.*client: <HOST>
+ignoreregex =
+EOL
     fi
 
-    if command -v freshclam &>/dev/null; then
-        freshclam
-        echo -e "${GREEN}ClamAV 病毒库已更新${RESET}"
-        log "ClamAV 病毒库已更新"
+    # 生成 portscan 过滤器
+    if [ ! -f /etc/fail2ban/filter.d/portscan.conf ]; then
+    cat > /etc/fail2ban/filter.d/portscan.conf <<'EOL'
+[Definition]
+failregex = scan from <HOST>
+ignoreregex =
+EOL
     fi
 
-    if systemctl list-unit-files | grep -q auditd; then
-        systemctl enable auditd --now
-        echo -e "${GREEN}auditd 已启动${RESET}"
-        log "auditd 已启动"
-    fi
-    echo -e "${GREEN}安全工具安装完成！${RESET}"
+    # 启动服务
+    systemctl enable fail2ban --now
+    systemctl restart fail2ban
+
+    echo -e "${GREEN}fail2ban 已全面配置并自动启动。${RESET}"
+    echo -e "${BLUE}已启用 SSH、WEB、FTP、SMTP、系统登录、端口扫描等多重防护。${RESET}"
+    echo -e "${BLUE}如你未用某服务，可手动编辑/etc/fail2ban/jail.local禁用对应 [xxx] 部分。${RESET}"
+    log "fail2ban 已全面配置并自动启动。"
 }
 
 install_cpulimit() {
@@ -243,7 +342,7 @@ main_menu() {
         echo -e "${BOLD}${BLUE}=============================="
         echo -e "  VPS安全环境 & CPU限制管理器"
         echo -e "==============================${RESET}"
-        echo -e "${YELLOW}1. 安装常用安全工具${RESET}"
+        echo -e "${YELLOW}1. 安装并全面配置fail2ban（全方位安全防护）${RESET}"
         echo -e "${YELLOW}2. 配置防火墙（全部端口开放）${RESET}"
         echo -e "${YELLOW}3. 部署并启用CPU限制服务${RESET}"
         echo -e "${YELLOW}4. 卸载CPU限制服务${RESET}"
@@ -252,7 +351,7 @@ main_menu() {
         read -p "$(echo -e "${BOLD}请选择操作 [1-5]：${RESET}")" choice
         case "$choice" in
             1)
-                install_security_tools
+                install_full_fail2ban
                 echo -e "${GREEN}已完成，按回车继续...${RESET}" ; read
                 ;;
             2)
