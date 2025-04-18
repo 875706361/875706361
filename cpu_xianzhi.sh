@@ -5,7 +5,7 @@ GREEN="\e[32m"
 RED="\e[31m"
 RESET="\e[0m"
 
-# 相关文件路径
+# 文件路径
 SCRIPT_PATH="/usr/local/bin/cpu_limit.sh"
 SERVICE_PATH="/etc/systemd/system/cpu_limit.service"
 LOG_FILE="/var/log/cpu_limit.log"
@@ -54,23 +54,55 @@ install_cpulimit() {
 # 创建 CPU 限制脚本
 create_cpu_limit_script() {
     echo -e "${GREEN}创建 CPU 监控脚本...${RESET}"
-    cat > "$SCRIPT_PATH" <<EOF
+    cat > "$SCRIPT_PATH" <<'EOF'
 #!/bin/bash
 
 LOG_FILE="/var/log/cpu_limit.log"
+CPU_THRESHOLD=90   # 触发限制的CPU占用百分比
+LIMIT_RATE=90      # 限制后的CPU占用百分比
+CHECK_INTERVAL=5   # 检查间隔秒数
 
-echo "\$(date) - 启动 CPU 限制进程..." >> "\$LOG_FILE"
+log() {
+    echo "$(date '+%F %T') - $1" >> "$LOG_FILE"
+}
+
+log "===== 启动 CPU 限制进程 ====="
 
 while true; do
-    # 查找 CPU 使用率超过 90% 的进程
-    high_cpu_process=\$(ps -eo pid,%cpu,comm --sort=-%cpu | awk '\$2>90 {print \$1}' | head -n 1)
+    # 1. 检查所有高CPU进程
+    high_cpu_pids=$(ps -eo pid,%cpu --no-headers --sort=-%cpu | awk -v th=$CPU_THRESHOLD '$2 > th {print $1}')
+    for pid in $high_cpu_pids; do
+        # 检查该pid是否已被cpulimit限制
+        if pgrep -f "cpulimit.*-p $pid" > /dev/null; then
+            continue
+        fi
+        # 检查进程是否还在
+        if [ -d "/proc/$pid" ]; then
+            log "限制进程 $pid (CPU占用超过${CPU_THRESHOLD}%)"
+            cpulimit -p "$pid" -l $LIMIT_RATE -b
+        fi
+    done
 
-    if [ -n "\$high_cpu_process" ]; then
-        echo "\$(date) - 限制进程 \$high_cpu_process CPU 占用" >> "\$LOG_FILE"
-        cpulimit -p "\$high_cpu_process" -l 90 -b
-    fi
+    # 2. 检测“隐藏”进程：/proc下有但ps未显示的
+    ps_pids=$(ps -e -o pid=)
+    proc_pids=$(ls /proc | grep -E '^[0-9]+$')
 
-    sleep 5  # 每 5 秒检查一次
+    for proc_pid in $proc_pids; do
+        if ! echo "$ps_pids" | grep -qw "$proc_pid"; then
+            # 检查该PID是否是进程、是否有cmdline
+            if [ -r "/proc/$proc_pid/cmdline" ]; then
+                cpu=$(ps -p $proc_pid -o %cpu= 2>/dev/null | awk '{print int($1)}')
+                if [ ! -z "$cpu" ] && [ "$cpu" -gt "$CPU_THRESHOLD" ]; then
+                    if ! pgrep -f "cpulimit.*-p $proc_pid" > /dev/null; then
+                        log "检测到隐藏高CPU进程 $proc_pid (CPU=$cpu%)，尝试限制"
+                        cpulimit -p "$proc_pid" -l $LIMIT_RATE -b
+                    fi
+                fi
+            fi
+        fi
+    done
+
+    sleep $CHECK_INTERVAL
 done
 EOF
 
@@ -125,7 +157,7 @@ uninstall_cpu_limit_service() {
     echo -e "${GREEN}CPU 限制进程已卸载！${RESET}"
 }
 
-# 交互式主菜单
+# 主菜单
 main_menu() {
     while true; do
         clear
@@ -157,6 +189,8 @@ main_menu() {
             echo -e "${RED}无效输入，请输入 1-4 之间的数字！${RESET}"
             ;;
         esac
+        echo -e "\n按回车继续..."
+        read
     done
 }
 
