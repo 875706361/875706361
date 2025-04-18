@@ -1,5 +1,31 @@
 #!/bin/bash
 
+# 如果没有被cpulimit限制，则用cpulimit重新调用本脚本
+if [ -z "$CPULIMIT_STARTED" ]; then
+    if ! command -v cpulimit >/dev/null 2>&1; then
+        echo "正在安装cpulimit..."
+        if [ -f /etc/os-release ]; then
+            . /etc/os-release
+            if [[ "$ID" == "ubuntu" || "$ID" == "debian" || "$ID_LIKE" =~ "debian" ]]; then
+                apt-get update && apt-get install -y cpulimit
+            elif [[ "$ID" == "centos" || "$ID" == "almalinux" || "$ID" == "rocky" || "$ID" == "rhel" || "$ID_LIKE" =~ "rhel" ]]; then
+                yum install -y epel-release
+                yum install -y cpulimit
+            else
+                echo "请手动安装cpulimit。"
+                exit 1
+            fi
+        else
+            echo "请手动安装cpulimit。"
+            exit 1
+        fi
+    fi
+    echo -e "\033[33m[INFO]\033[0m 本脚本将以最大CPU 80%限制方式运行..."
+    export CPULIMIT_STARTED=1
+    exec cpulimit -l 80 -- bash "$0" "$@"
+    exit 0
+fi
+
 # 彩色定义
 GREEN="\033[32m"
 RED="\033[31m"
@@ -245,7 +271,6 @@ ignoreregex =
 EOL
     fi
 
-    # 启动服务
     systemctl enable fail2ban --now
     systemctl restart fail2ban
 
@@ -267,9 +292,9 @@ create_cpu_limit_script() {
 #!/bin/bash
 
 LOG_FILE="/var/log/cpu_limit.log"
-CPU_THRESHOLD=90
-LIMIT_RATE=90
-XRAY_LIMIT=50
+CPU_THRESHOLD=80
+LIMIT_RATE=80
+XRAY_LIMIT=80
 CHECK_INTERVAL=5
 
 log() {
@@ -374,7 +399,7 @@ main_menu() {
         echo -e "==============================${RESET}"
         echo -e "${YELLOW}1. 安装并全面配置fail2ban（全方位安全防护）${RESET}"
         echo -e "${YELLOW}2. 配置防火墙（全部端口开放）${RESET}"
-        echo -e "${YELLOW}3. 部署并启用CPU限制服务${RESET}"
+        echo -e "${YELLOW}3. 部署并启用CPU限制服务（全局80%）${RESET}"
         echo -e "${YELLOW}4. 卸载CPU限制服务${RESET}"
         echo -e "${YELLOW}5. 退出${RESET}"
         echo -e "${BLUE}------------------------------${RESET}"
