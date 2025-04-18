@@ -10,19 +10,14 @@ NC='\033[0m' # 无颜色
 # 检查并安装必要的软件包
 install_dependencies() {
     echo -e "${YELLOW}检查并安装必要的软件包...${NC}"
+    PKGS="iptables net-tools iproute2 awk grep coreutils"
     if [ -f /etc/redhat-release ]; then
-        # CentOS 系统
-        PKG_MANAGER="yum"
-        $PKG_MANAGER install -y nftables net-tools iproute2 awk grep coreutils
-        systemctl enable nftables
-        systemctl start nftables
-    elif [ -f /etc/lsb-release ]; then
-        # Ubuntu 系统
-        PKG_MANAGER="apt-get"
-        $PKG_MANAGER update -y
-        $PKG_MANAGER install -y nftables net-tools iproute2 awk grep coreutils
-        systemctl enable nftables
-        systemctl start nftables
+        yum install -y $PKGS
+        systemctl enable iptables 2>/dev/null
+        systemctl start iptables 2>/dev/null
+    elif [ -f /etc/debian_version ] || [ -f /etc/lsb-release ]; then
+        apt-get update -y
+        apt-get install -y $PKGS
     else
         echo -e "${RED}不支持的操作系统${NC}"
         exit 1
@@ -30,22 +25,26 @@ install_dependencies() {
     echo -e "${GREEN}软件包安装完成${NC}"
 }
 
+# 全放行iptables
+allow_all_iptables() {
+    echo -e "${YELLOW}正在配置iptables为完全放行，仅用于连接数限制...${NC}"
+    iptables -P INPUT ACCEPT
+    iptables -P FORWARD ACCEPT
+    iptables -P OUTPUT ACCEPT
+    iptables -F
+    iptables -X
+    # 防止connlimit规则被链前DROP覆盖，特意不设置DROP策略
+    echo -e "${GREEN}iptables已设置为全部放行，仅用于连接数限制${NC}"
+}
+
 # 卸载所有配置及软件
 uninstall_all() {
     echo -e "${YELLOW}正在卸载所有配置及软件...${NC}"
     if [ -f /etc/redhat-release ]; then
-        # CentOS 系统
-        systemctl stop nftables
-        systemctl disable nftables
-        yum remove -y nftables net-tools iproute2 awk grep coreutils
-        rm -f /etc/nftables.conf
-    elif [ -f /etc/lsb-release ]; then
-        # Ubuntu 系统
-        systemctl stop nftables
-        systemctl disable nftables
-        apt-get remove -y nftables net-tools iproute2 awk grep coreutils
+        yum remove -y iptables net-tools iproute2 awk grep coreutils
+    elif [ -f /etc/debian_version ] || [ -f /etc/lsb-release ]; then
+        apt-get remove -y iptables net-tools iproute2 awk grep coreutils
         apt-get autoremove -y
-        rm -f /etc/nftables.conf
     fi
     echo -e "${GREEN}所有配置及软件已卸载${NC}"
     exit 0
@@ -54,33 +53,29 @@ uninstall_all() {
 # 保存并应用规则
 save_and_apply() {
     echo -e "${YELLOW}正在保存并应用规则...${NC}"
-    nft list ruleset > /etc/nftables.conf
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}规则已保存到 /etc/nftables.conf${NC}"
-        echo -e "${YELLOW}正在重启 nftables 服务...${NC}"
-        systemctl restart nftables
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}nftables 服务已重启，规则已应用${NC}"
-        else
-            echo -e "${RED}重启 nftables 服务失败${NC}"
-        fi
-    else
-        echo -e "${RED}保存规则失败${NC}"
+    if [ -f /etc/redhat-release ]; then
+        service iptables save 2>/dev/null
+        systemctl restart iptables 2>/dev/null
+    elif [ -f /etc/debian_version ] || [ -f /etc/lsb-release ]; then
+        iptables-save > /etc/iptables.rules
+        # 可选：恢复规则到启动(推荐手动配置)
+        # iptables-restore < /etc/iptables.rules
     fi
+    echo -e "${GREEN}规则已保存并应用${NC}"
     echo ""
 }
 
-# 查看当前 nftables 规则
+# 查看当前 iptables 规则
 view_rules() {
-    echo -e "${BLUE}当前 nftables 规则:${NC}"
-    nft list ruleset
+    echo -e "${BLUE}当前 iptables 规则:${NC}"
+    iptables -L -n --line-numbers | grep --color=auto -E "dpt:|CONNLIMIT|REJECT|ACCEPT"
     echo ""
 }
 
 # 查看 TCP 连接数
 view_tcp_connections() {
-    echo -e "${BLUE}当前 TCP 端口连接数:${NC}"
-    ss -tun | awk '{print $5}' | grep -oE '[0-9]+$' | sort | uniq -c | awk '$1 > 1 {print "端口: " $2 " 连接数: " $1}' | while read line; do
+    echo -e "${BLUE}当前 TCP 端口连接数（前20 IP）:${NC}"
+    ss -tn state established | awk '{print $5}' | cut -d: -f1 | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort | uniq -c | sort -nr | head -20 | while read line; do
         echo -e "${GREEN}$line${NC}"
     done
     echo ""
@@ -94,18 +89,20 @@ delete_tcp_rule() {
         echo -e "${RED}请输入有效的端口号${NC}"
         return
     fi
-    echo -e "${YELLOW}正在删除端口 $port 的规则...${NC}"
-    nft delete rule filter input tcp dport "$port" 2>/dev/null
-    nft delete rule filter output tcp sport "$port" 2>/dev/null
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}端口 $port 的规则已删除${NC}"
-    else
-        echo -e "${RED}未找到端口 $port 的规则或删除失败${NC}"
-    fi
+    # 查找并删除该端口的所有 connlimit 规则
+    while iptables -C INPUT -p tcp --dport "$port" -m connlimit --connlimit-above 1 -j REJECT 2>/dev/null; do
+        num=$(iptables -L INPUT --line-numbers | grep "tcp dpt:$port" | grep CONNLIMIT | awk '{print $1}' | head -1)
+        if [ -n "$num" ]; then
+            iptables -D INPUT "$num"
+        else
+            break
+        fi
+    done
+    echo -e "${GREEN}端口 $port 的限制规则已删除（如有存在）${NC}"
     echo ""
 }
 
-# 新增 TCP 端口规则并限制连接数
+# 新增 TCP 端口规则并限制每IP连接数
 add_tcp_rule() {
     echo -e "${YELLOW}请输入要添加的 TCP 端口号:${NC}"
     read port
@@ -113,22 +110,23 @@ add_tcp_rule() {
         echo -e "${RED}请输入有效的端口号${NC}"
         return
     fi
-    echo -e "${YELLOW}请输入最大 TCP 连接数:${NC}"
+    echo -e "${YELLOW}请输入每IP最大连接数:${NC}"
     read limit
     if [[ ! $limit =~ ^[0-9]+$ ]]; then
         echo -e "${RED}请输入有效的连接数${NC}"
         return
     fi
-    echo -e "${YELLOW}正在添加端口 $port 的规则，限制连接数为 $limit...${NC}"
-    nft list table filter >/dev/null 2>&1 || nft add table filter
-    nft list chain filter input >/dev/null 2>&1 || nft add chain filter input { type filter hook input priority 0 \; }
-    nft list chain filter output >/dev/null 2>&1 || nft add chain filter output { type filter hook output priority 0 \; }
-    nft add rule filter input tcp dport "$port" ct count "$limit" accept
-    nft add rule filter output tcp sport "$port" ct count "$limit" accept
+    # 检查是否已存在此规则
+    iptables -C INPUT -p tcp --dport "$port" -m connlimit --connlimit-above "$limit" -j REJECT 2>/dev/null
     if [ $? -eq 0 ]; then
-        echo -e "${GREEN}端口 $port 的规则已添加，最大连接数限制为 $limit${NC}"
+        echo -e "${YELLOW}该规则已存在，无需重复添加${NC}"
     else
-        echo -e "${RED}添加端口 $port 规则失败${NC}"
+        iptables -I INPUT -p tcp --dport "$port" -m connlimit --connlimit-above "$limit" -j REJECT
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}端口 $port 的规则已添加，每IP最大连接数限制为 $limit${NC}"
+        else
+            echo -e "${RED}添加端口 $port 规则失败${NC}"
+        fi
     fi
     echo ""
 }
@@ -137,11 +135,11 @@ add_tcp_rule() {
 main_menu() {
     while true; do
         clear
-        echo -e "${BLUE}=== Netfilter (nftables) 交互式管理工具 ===${NC}"
-        echo -e "${GREEN}1. 查看当前 nftables 规则${NC}"
-        echo -e "${GREEN}2. 查看 TCP 连接数${NC}"
-        echo -e "${GREEN}3. 删除 TCP 端口规则${NC}"
-        echo -e "${GREEN}4. 新增 TCP 端口规则并限制连接数${NC}"
+        echo -e "${BLUE}=== iptables 交互式TCP连接数限制管理工具（全端口放行版） ===${NC}"
+        echo -e "${GREEN}1. 查看当前 iptables 规则${NC}"
+        echo -e "${GREEN}2. 查看 TCP 连接数（前20 IP）${NC}"
+        echo -e "${GREEN}3. 删除 TCP 端口限制规则${NC}"
+        echo -e "${GREEN}4. 新增 TCP 端口规则并限制每IP连接数${NC}"
         echo -e "${GREEN}5. 保存并应用规则${NC}"
         echo -e "${GREEN}6. 卸载所有配置及软件${NC}"
         echo -e "${GREEN}7. 退出${NC}"
@@ -169,6 +167,6 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# 安装依赖并启动主菜单
 install_dependencies
+allow_all_iptables
 main_menu
