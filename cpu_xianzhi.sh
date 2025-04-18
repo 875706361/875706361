@@ -35,18 +35,48 @@ inst() {
             log "正在安装 $pkg ..."
             case "$OS_ID" in
                 ubuntu|debian)
-                    apt-get update && apt-get install -y $pkg
+                    echo -e "${BLUE}>>> apt-get update${RESET}"
+                    apt-get update -y 2>&1 | tee /tmp/apt-update.log
+                    echo -e "${BLUE}>>> apt-get install -y $pkg${RESET}"
+                    apt-get install -y $pkg 2>&1 | tee /tmp/apt-install-$pkg.log
+                    if ! command -v $pkg &>/dev/null; then
+                        echo -e "${RED}!!! $pkg 安装失败${RESET}"
+                        log "$pkg 安装失败"
+                        exit 1
+                    fi
                     ;;
                 centos|almalinux|rocky|rhel)
-                    yum install -y epel-release
-                    yum install -y $pkg
+                    echo -e "${BLUE}>>> yum install -y epel-release${RESET}"
+                    yum install -y epel-release 2>&1 | tee /tmp/yum-epel.log
+                    echo -e "${BLUE}>>> yum install -y $pkg${RESET}"
+                    yum install -y $pkg 2>&1 | tee /tmp/yum-install-$pkg.log
+                    if ! command -v $pkg &>/dev/null; then
+                        echo -e "${RED}!!! $pkg 安装失败${RESET}"
+                        log "$pkg 安装失败"
+                        exit 1
+                    fi
                     ;;
                 *)
                     if [[ "$OS_LIKE" =~ "debian" ]]; then
-                        apt-get update && apt-get install -y $pkg
+                        echo -e "${BLUE}>>> apt-get update${RESET}"
+                        apt-get update -y 2>&1 | tee /tmp/apt-update.log
+                        echo -e "${BLUE}>>> apt-get install -y $pkg${RESET}"
+                        apt-get install -y $pkg 2>&1 | tee /tmp/apt-install-$pkg.log
+                        if ! command -v $pkg &>/dev/null; then
+                            echo -e "${RED}!!! $pkg 安装失败${RESET}"
+                            log "$pkg 安装失败"
+                            exit 1
+                        fi
                     elif [[ "$OS_LIKE" =~ "rhel" ]]; then
-                        yum install -y epel-release
-                        yum install -y $pkg
+                        echo -e "${BLUE}>>> yum install -y epel-release${RESET}"
+                        yum install -y epel-release 2>&1 | tee /tmp/yum-epel.log
+                        echo -e "${BLUE}>>> yum install -y $pkg${RESET}"
+                        yum install -y $pkg 2>&1 | tee /tmp/yum-install-$pkg.log
+                        if ! command -v $pkg &>/dev/null; then
+                            echo -e "${RED}!!! $pkg 安装失败${RESET}"
+                            log "$pkg 安装失败"
+                            exit 1
+                        fi
                     else
                         echo -e "${RED}未知系统：请手动安装 $pkg${RESET}"
                         log "未知系统：请手动安装 $pkg"
