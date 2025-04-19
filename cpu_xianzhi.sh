@@ -232,12 +232,12 @@ mta = sendmail
 action = %(action_mwl)s
 
 [sshd]
-enabled = true # SSH防护 (默认开启)
+enabled = false # SSH防护 (默认开启)
 port    = ssh
 logpath = %(sshd_log)s
 
 [systemd-logind]
-enabled = true # 系统登录防护 (systemd, 默认开启)
+enabled = false # 系统登录防护 (systemd, 默认开启)
 
 # --- FTP 服务 ---
 [vsftpd]
@@ -293,7 +293,7 @@ maxretry = 2
 enabled   = true # 端口扫描防护 (默认开启, 依赖防火墙日志)
 filter    = portscan # 使用下面的 portscan.conf 过滤器
 # logpath 省略，使用 backend = systemd 和 filter 中的 journalmatch
-maxretry  = 2      # 2次可疑尝试就触发 (可适当调高减少误报, 如 5-10)
+maxretry  = 10     # 10次可疑尝试就触发 (可适当调高减少误报, 如 5-10)
 findtime  = 600    # 在10分钟内
 bantime   = 86400  # 封禁 1 天 (可适当缩短减少误伤, 如 3600)
 
