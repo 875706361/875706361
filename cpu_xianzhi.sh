@@ -114,58 +114,62 @@ detect_os() {
     log "检测到操作系统: ID=$OS_ID, ID_LIKE=$OS_LIKE"
 }
 
-# 统一的包安装函数 (已修正)
+# 统一的包安装函数 (已修正并优化验证逻辑)
 inst() {
     for pkg in "$@"; do
         # 检查包是否已经安装 (通过检查命令是否存在)
-        if command -v $pkg &>/dev/null; then
-            echo -e "${GREEN}$pkg 已安装${RESET}"
-            log "$pkg 已安装"
+        # 针对特定包，检查其主要命令
+        cmd_to_check_pre="$pkg"
+        if [ "$pkg" == "fail2ban" ]; then
+            cmd_to_check_pre="fail2ban-client"
+        fi
+        if command -v "$cmd_to_check_pre" &>/dev/null; then
+            echo -e "${GREEN}$pkg (命令: $cmd_to_check_pre) 已安装${RESET}"
+            log "$pkg (命令: $cmd_to_check_pre) 已安装"
             continue # 如果已安装，跳过当前包，处理下一个
         fi
 
         echo -e "${YELLOW}正在安装 $pkg ...${RESET}"
         log "正在安装 $pkg ..."
         PKG_MANAGER=""
-        # 检测使用 dnf 还是 yum
+        # 检测使用 dnf, yum 或 apt-get
         if command -v dnf &>/dev/null; then
             PKG_MANAGER="dnf"
         elif command -v yum &>/dev/null; then
             PKG_MANAGER="yum"
         elif command -v apt-get &>/dev/null; then
-            PKG_MANAGER="apt-get" # 增加对apt的识别
+            PKG_MANAGER="apt-get"
         else
              echo -e "${RED}错误：无法找到 apt, yum 或 dnf 包管理器！${RESET}"
              log "错误：无法找到 apt, yum 或 dnf 包管理器！"
-             exit 1 # 关键依赖缺失，退出
+             exit 1
         fi
         log "使用包管理器: $PKG_MANAGER"
         echo -e "${BLUE}使用包管理器: $PKG_MANAGER${RESET}"
 
+        INSTALL_LOG="" # 初始化日志文件路径变量
+
         case "$OS_ID" in
             ubuntu|debian)
+                INSTALL_LOG="/tmp/apt-install-$pkg.log"
                 echo -e "${BLUE}>>> $PKG_MANAGER update${RESET}"
-                # 更新包列表，并将输出重定向到日志，忽略错误 (-qq 表示安静模式，减少输出)
                 $PKG_MANAGER update -y > /tmp/apt-update.log 2>&1
                 echo -e "${BLUE}>>> $PKG_MANAGER install -y $pkg${RESET}"
-                # 安装包，并将输出重定向到日志
-                $PKG_MANAGER install -y $pkg > "/tmp/apt-install-$pkg.log" 2>&1
+                $PKG_MANAGER install -y $pkg > "$INSTALL_LOG" 2>&1
                 ;;
             centos|almalinux|rocky|rhel)
-                # 检查并安装 EPEL (Extra Packages for Enterprise Linux)
+                INSTALL_LOG="/tmp/$PKG_MANAGER-install-$pkg.log"
+                # 检查并安装 EPEL
                 if ! rpm -q epel-release &>/dev/null; then
                     echo -e "${BLUE}>>> $PKG_MANAGER install -y epel-release${RESET}"
-                    # 安装 EPEL release，并将输出重定向到日志
                     $PKG_MANAGER install -y epel-release > /tmp/$PKG_MANAGER-epel.log 2>&1
-                    # 验证EPEL是否真的安装成功
                     if ! rpm -q epel-release &>/dev/null; then
                         echo -e "${RED}!!! EPEL Repository 安装失败，请检查网络或查看日志 /tmp/$PKG_MANAGER-epel.log ${RESET}"
                         log "错误：EPEL Repository 安装失败"
-                        exit 1 # EPEL是很多包的前提，安装失败则退出
+                        exit 1
                     else
                          echo -e "${GREEN}EPEL Repository 已成功安装${RESET}"
                          log "EPEL Repository 已成功安装"
-                         # EPEL刚装上，最好刷新一下缓存
                          echo -e "${BLUE}>>> $PKG_MANAGER makecache${RESET}"
                          $PKG_MANAGER makecache > /tmp/$PKG_MANAGER-makecache.log 2>&1
                     fi
@@ -173,24 +177,22 @@ inst() {
                     echo -e "${GREEN}EPEL Repository 已存在${RESET}"
                     log "EPEL Repository 已存在"
                 fi
-
                 # 安装目标包
                 echo -e "${BLUE}>>> $PKG_MANAGER install -y $pkg${RESET}"
-                # 安装目标包，并将输出重定向到日志
-                $PKG_MANAGER install -y $pkg > "/tmp/$PKG_MANAGER-install-$pkg.log" 2>&1
+                $PKG_MANAGER install -y $pkg > "$INSTALL_LOG" 2>&1
                 ;;
             *)
-                # 如果 OS_ID 不直接匹配，尝试根据 OS_LIKE 来判断
+                # 根据 OS_LIKE 处理
                 if [[ "$OS_LIKE" =~ "debian" ]]; then
-                    # 类 Debian 系统 (如 Deepin, UOS) 使用 apt
-                    PKG_MANAGER="apt-get" # 确认使用 apt-get
-                    log "检测到类 Debian 系统，使用 apt-get"
+                    PKG_MANAGER="apt-get"
+                    INSTALL_LOG="/tmp/apt-install-$pkg.log"
+                    log "检测到类 Debian 系统，使用 $PKG_MANAGER"
                     echo -e "${BLUE}>>> $PKG_MANAGER update${RESET}"
                     $PKG_MANAGER update -y > /tmp/apt-update.log 2>&1
                     echo -e "${BLUE}>>> $PKG_MANAGER install -y $pkg${RESET}"
-                    $PKG_MANAGER install -y $pkg > "/tmp/apt-install-$pkg.log" 2>&1
+                    $PKG_MANAGER install -y $pkg > "$INSTALL_LOG" 2>&1
                 elif [[ "$OS_LIKE" =~ "rhel" ]]; then
-                    # 类 RHEL 系统 (如 Fedora, Oracle Linux) 使用 dnf/yum
+                    INSTALL_LOG="/tmp/$PKG_MANAGER-install-$pkg.log"
                     log "检测到类 RHEL 系统，使用 $PKG_MANAGER"
                      # 同样需要检查并安装 EPEL
                     if ! rpm -q epel-release &>/dev/null; then
@@ -212,36 +214,61 @@ inst() {
                     fi
                     # 安装目标包
                     echo -e "${BLUE}>>> $PKG_MANAGER install -y $pkg${RESET}"
-                    $PKG_MANAGER install -y $pkg > "/tmp/$PKG_MANAGER-install-$pkg.log" 2>&1
+                    $PKG_MANAGER install -y $pkg > "$INSTALL_LOG" 2>&1
                 else
-                    # 实在无法判断，提示用户手动安装
                     echo -e "${RED}警告：无法为 $OS_ID ($OS_LIKE) 自动安装 $pkg，请手动安装。${RESET}"
                     log "警告：无法为 $OS_ID ($OS_LIKE) 自动安装 $pkg，请手动安装。"
-                    # 这里选择 continue 而不是 exit，也许其他包可以安装
                     continue
                 fi
                 ;;
         esac
 
-        # 安装命令执行后，再次验证包 (命令) 是否可用
-        if ! command -v $pkg &>/dev/null; then
-            INSTALL_LOG=""
-            # 确定刚才使用的是哪个包管理器，以找到正确的日志文件
-            case "$OS_ID" in
-                 ubuntu|debian) INSTALL_LOG="/tmp/apt-install-$pkg.log";;
-                 centos|almalinux|rocky|rhel) INSTALL_LOG="/tmp/$PKG_MANAGER-install-$pkg.log";;
-                 *)
-                    if [[ "$OS_LIKE" =~ "debian" ]]; then INSTALL_LOG="/tmp/apt-install-$pkg.log"; fi
-                    if [[ "$OS_LIKE" =~ "rhel" ]]; then INSTALL_LOG="/tmp/$PKG_MANAGER-install-$pkg.log"; fi
-                    ;;
-            esac
-            # 提供具体的失败信息和日志文件路径
-            echo -e "${RED}!!! $pkg 安装失败。请检查安装日志: $INSTALL_LOG ${RESET}"
-            log "错误: $pkg 安装失败。日志: $INSTALL_LOG"
-            exit 1 # 重要的依赖安装失败，退出脚本
+        # 清除命令路径哈希缓存，强制shell重新查找命令
+        hash -r
+        log "执行 hash -r 清除命令路径缓存"
+
+        # 确定用于验证的命令
+        cmd_to_check="$pkg"
+        if [ "$pkg" == "fail2ban" ]; then
+            cmd_to_check="fail2ban-client"
+            log "为 fail2ban 包特别检查命令: $cmd_to_check"
+        # 可以为其他包添加类似的 elif 判断
+        # elif [ "$pkg" == "some-other-package" ]; then
+        #    cmd_to_check="actual-command-name"
+        fi
+        log "用于验证 $pkg 安装的命令是: $cmd_to_check"
+
+        # 最终验证安装是否成功 (检查命令是否存在)
+        if ! command -v "$cmd_to_check" &>/dev/null; then
+            pm_success_likely=false
+            # 尝试判断包管理器是否报告成功 (简单判断：日志文件存在且不为空)
+            # 注意：更精确的判断需要解析具体包管理器的成功标识，如 "Complete!"
+            if [ -f "$INSTALL_LOG" ] && [ -s "$INSTALL_LOG" ] && tail "$INSTALL_LOG" | grep -qi "complete\|installed"; then
+                pm_success_likely=true
+                log "包管理器日志 $INSTALL_LOG 存在且包含成功指示符。"
+            elif [ -f "$INSTALL_LOG" ]; then
+                 log "包管理器日志 $INSTALL_LOG 存在，但未检测到明确成功指示符。"
+            else
+                 log "未找到包管理器日志 $INSTALL_LOG。"
+            fi
+
+            # 如果包管理器日志显示可能成功了，但命令找不到
+            if $pm_success_likely; then
+                echo -e "${RED}!!! 警告：包管理器日志 $INSTALL_LOG 显示 $pkg 可能已安装，但命令 '$cmd_to_check' 未在 PATH 中找到或无法执行。${RESET}"
+                echo -e "${RED}!!! 请手动运行 'command -v $cmd_to_check' 或检查服务状态确认。脚本将继续执行，但 $pkg 可能无法正常工作。${RESET}"
+                log "警告：包管理器日志 $INSTALL_LOG 显示 $pkg 可能已安装，但命令 '$cmd_to_check' 未在 PATH 中找到。脚本将继续。"
+                # 这里选择不退出(continue)，但给用户足够警告
+                # 如果希望严格一点，可以在这里 exit 1
+            else
+                # 如果包管理器本身就可能失败了（日志不存在或没有成功标记）
+                echo -e "${RED}!!! $pkg 安装失败。无法找到命令 '$cmd_to_check'。请检查安装日志: $INSTALL_LOG ${RESET}"
+                log "错误: $pkg 安装失败。无法找到命令 '$cmd_to_check'。日志: $INSTALL_LOG"
+                exit 1 # 如果安装过程本身就可能有问题，则退出
+            fi
         else
-            echo -e "${GREEN}$pkg 安装成功！${RESET}"
-            log "$pkg 安装成功！"
+            # 如果命令找到了，报告成功
+            echo -e "${GREEN}$pkg (验证命令: $cmd_to_check) 安装验证成功！${RESET}"
+            log "$pkg (验证命令: $cmd_to_check) 安装验证成功！"
         fi
     done
 }
@@ -270,9 +297,9 @@ setup_firewall_openall() {
             systemctl enable firewalld --now
             echo -e "${BLUE}firewalld切换到trusted区域（全部端口开放）...${RESET}"
             # 将默认区域设置为 trusted，该区域默认允许所有连接
-            firewalld-cmd --set-default-zone=trusted --permanent
+            firewall-cmd --set-default-zone=trusted --permanent
             # 重新加载防火墙规则使设置生效
-            firewalld-cmd --reload
+            firewall-cmd --reload
             log "firewalld 默认区域已设置为 trusted"
             ;;
         *)
@@ -287,8 +314,8 @@ setup_firewall_openall() {
             elif [[ "$OS_LIKE" =~ "rhel" ]]; then
                 inst firewalld
                 systemctl enable firewalld --now
-                firewalld-cmd --set-default-zone=trusted --permanent
-                firewalld-cmd --reload
+                firewall-cmd --set-default-zone=trusted --permanent
+                firewall-cmd --reload
                 log "firewalld (类RHEL) 默认区域已设置为 trusted"
             else
                 echo -e "${RED}警告：无法为此系统自动配置防火墙。${RESET}"
@@ -465,13 +492,12 @@ EOF
     if [ ! -f /etc/fail2ban/filter.d/nginx-http-auth.conf ]; then
         echo -e "${BLUE}创建 Nginx HTTP Auth 过滤器...${RESET}"
         log "创建 Nginx HTTP Auth 过滤器..."
+        # 使用更健壮的 Nginx basic auth 正则表达式
         cat > /etc/fail2ban/filter.d/nginx-http-auth.conf <<'EOL'
-# Fail2Ban filter for nginx basic auth failures
 [Definition]
 failregex = ^ \[error\] \d+#\d+: \*\d+ user "\S+":? password mismatch, client: <HOST>, server: \S+, request: "\S+ \S+ HTTP/\d+\.\d+", host: "\S+"$
             ^ \[error\] \d+#\d+: \*\d+ no user/password was provided for basic authentication, client: <HOST>, server: \S+, request: "\S+ \S+ HTTP/\d+\.\d+", host: "\S+"$
             ^ \[error\] \d+#\d+: \*\d+ user "\S+" was not found in ".+", client: <HOST>, server: \S+, request: "\S+ \S+ HTTP/\d+\.\d+", host: "\S+"$
-
 ignoreregex =
 EOL
     fi
@@ -479,10 +505,15 @@ EOL
     # 确保 fail2ban 服务开机自启并立即启动/重启
     echo -e "${BLUE}启用并重启 fail2ban 服务...${RESET}"
     systemctl enable fail2ban --now
+    # 重启前稍微等待一下，确保配置文件写入完成，特别是在慢速系统上
+    sleep 1
     systemctl restart fail2ban
-    log "Fail2ban 服务已启用并重启。"
+    log "Fail2ban 服务已尝试启用并重启。"
 
     # 检查服务状态
+    # 等待几秒让服务有时间启动
+    echo -e "${BLUE}等待 fail2ban 服务启动...${RESET}"
+    sleep 3
     if systemctl is-active --quiet fail2ban; then
         echo -e "${GREEN}fail2ban 已成功配置并启动。${RESET}"
         echo -e "${BLUE}已启用 SSH 防护。其他服务（如Web、FTP、Mail）默认未启用。${RESET}"
@@ -491,6 +522,8 @@ EOL
     else
         echo -e "${RED}Fail2ban 服务启动失败！请检查日志：'journalctl -u fail2ban' 或 /var/log/fail2ban.log ${RESET}"
         log "错误：Fail2ban 服务启动失败！"
+        # 这里可以选择是否因为 fail2ban 启动失败而退出脚本
+        # exit 1
     fi
 }
 
@@ -521,97 +554,66 @@ CHECK_INTERVAL=5
 
 # 简易日志函数
 log() {
+    # 追加写入日志
     echo "$(date '+%F %T') - $1" >> "$LOG_FILE"
 }
 
-log "===== 启动 CPU 限制监控守护进程 ====="
-
-# 无限循环，持续监控
+# ----- 主循环 -----
+log "===== 启动 CPU 限制监控守护进程 (v2) ====="
 while true; do
-    # --- 针对特定进程 (如 xray/x-ui) 的特殊限制 ---
-    # 找到所有 xray 或 x-ui 相关的进程 PID
-    # 使用 pgrep 的 -f 选项来匹配完整命令行
-    for xpid in $(pgrep -f "xray|x-ui" || echo ""); do
-        # 检查是否已经有一个 cpulimit 进程在限制这个 PID
-        # -f 再次用于匹配包含 "-p $xpid" 的 cpulimit 命令行
-        if ! pgrep -f "cpulimit.*-p $xpid" > /dev/null; then
-            # 如果没有被限制，则启动 cpulimit
-            log "检测到 xray/x-ui 进程 [PID=$xpid]，应用限制 ${XRAY_LIMIT}%"
-            # -p 指定 PID, -l 指定百分比, -b 让 cpulimit 在后台运行
-            cpulimit -p "$xpid" -l "$XRAY_LIMIT" -b
-            # 检查 cpulimit 是否成功启动 (可选，但有助于调试)
-            if [ $? -ne 0 ]; then
-                 log "警告：为 PID=$xpid 启动 cpulimit 失败"
-            fi
-        fi
-    done
+    # --- 查找并限制高 CPU 进程 ---
+    # 使用 ps 获取 PID, CPU%, 完整命令行 (args)
+    # --no-headers 不显示标题
+    # --sort=-%cpu 按 CPU 降序排序
+    # awk: 过滤掉内核线程([kthreadd]), awk自身, cpulimit, 本脚本; 并且 CPU > 阈值
+    ps -eo pid,%cpu,args --no-headers --sort=-%cpu | \
+    awk -v ct="$CPU_THRESHOLD" -v lr="$LIMIT_RATE" -v xl="$XRAY_LIMIT" -v log_file="$LOG_FILE" '
+    function log_msg(level, message) {
+        printf "%s - [%s] %s\n", strftime("%F %T"), level, message >> log_file;
+        fflush(log_file); # 确保日志立即写入
+    }
+    {
+        pid = $1;
+        cpu = int($2); # 取整比较
+        cmd = $3;
+        full_cmd = ""; for(i=3; i<=NF; i++) full_cmd = full_cmd $i " "; # 拼接完整命令行
 
-    # --- 针对所有其他高 CPU 进程的通用限制 ---
-    # 使用 ps 命令获取所有进程的 PID, CPU使用率(%CPU), 命令名(comm)
-    # --no-headers 不显示标题行
-    # --sort=-%cpu 按 CPU 使用率降序排序
-    # awk: 如果第二列 (%CPU) 大于阈值 (th)，则打印 "PID,命令名"
-    high_cpu_pids=$(ps -eo pid,%cpu,comm --no-headers --sort=-%cpu | awk -v th=$CPU_THRESHOLD '$2 >= th {printf "%s,%s\n", $1, $3}')
+        # 跳过内核线程, awk, cpulimit, 和本脚本自身
+        if (cmd ~ /^\[.+\]$/ || cmd == "awk" || cmd == "cpulimit" || full_cmd ~ /cpu_limit\.sh/) {
+            next;
+        }
 
-    # 遍历找到的高 CPU 进程列表
-    for entry in $high_cpu_pids; do
-        # 从 "PID,命令名" 中提取 PID 和 命令名
-        pid="${entry%%,*}"
-        name="${entry##*,}"
+        # 检查 CPU 是否超过阈值
+        if (cpu >= ct) {
+            limit_to = lr; # 默认限制率
+            process_type = "常规高CPU进程";
 
-        # 跳过 xray/x-ui 进程，因为上面已经单独处理了
-        # 也跳过 cpulimit 自身和脚本自身，防止自我限制
-        if [[ "$name" =~ ^(xray|x-ui|cpulimit|cpu_limit\.sh)$ ]]; then
-            continue
-        fi
+            # 对 xray/x-ui 应用特殊限制率
+            if (full_cmd ~ /xray|x-ui/) {
+                limit_to = xl;
+                process_type = "xray/x-ui进程";
+            }
 
-        # 再次检查该 PID 是否已被 cpulimit 限制
-        if ! pgrep -f "cpulimit.*-p $pid" > /dev/null; then
-            # 检查进程是否仍然存在 (避免在进程消失的瞬间尝试限制)
-            if [ -d "/proc/$pid" ]; then
-                # 获取该进程当前的 CPU 使用率 (整数部分)
-                current_cpu=$(ps -p "$pid" -o %cpu --no-headers | awk '{print int($1)}')
-                log "检测到高 CPU 进程: PID=$pid ($name), CPU=${current_cpu}%, 超过阈值 ${CPU_THRESHOLD}%. 应用限制 ${LIMIT_RATE}%"
-                # 启动 cpulimit 进行限制
-                cpulimit -p "$pid" -l "$LIMIT_RATE" -b
-                 if [ $? -ne 0 ]; then
-                    log "警告：为 PID=$pid ($name) 启动 cpulimit 失败"
-                 fi
-            fi
-        fi
-    done
+            # 检查是否已被限制 (通过检查是否有 cpulimit -p $pid 在运行)
+            # 使用 system() 调用 pgrep，注意引号和转义
+            check_cmd = "pgrep -f \"cpulimit .* -p " pid "\" > /dev/null";
+            if (system(check_cmd) != 0) {
+                # 如果没有被限制，则应用限制
+                log_msg("INFO", sprintf("检测到%s: PID=%d (%s), CPU=%d%% >= %d%%. 应用限制 %d%%", process_type, pid, cmd, cpu, ct, limit_to));
+                limit_cmd = sprintf("cpulimit -p %d -l %d -b", pid, limit_to);
+                ret = system(limit_cmd);
+                if (ret != 0) {
+                    log_msg("WARN", sprintf("为 PID=%d (%s) 启动 cpulimit 失败，返回码: %d", pid, cmd, ret));
+                }
+            }
+            # else { log_msg("DEBUG", sprintf("进程 PID=%d (%s) 已被限制，跳过", pid, cmd)); } # 可选的调试日志
+        }
+    }' # awk 脚本结束
 
-    # --- 检测可能的 "隐藏" 或短时高 CPU 进程 (可选，实验性) ---
-    # 这个部分尝试找到那些在 `ps` 输出中可能被隐藏（例如通过修改进程名）
-    # 或者运行时间极短但 CPU 占用很高，难以被上面常规方法捕捉的进程
-    # 注意：这可能产生误报或开销较大，可以按需注释掉
-    # ps_pids=$(ps -e -o pid=) # 获取所有当前 ps 能看到的 PID
-    # proc_pids=$(ls /proc | grep -E '^[0-9]+$') # 获取 /proc 下所有数字目录 (代表进程)
-    # for proc_pid in $proc_pids; do
-    #     # 检查 /proc 下的 PID 是否不在 ps 的输出中
-    #     if ! echo "$ps_pids" | grep -qw "$proc_pid"; then
-    #         # 尝试读取 cmdline 判断是否是内核线程等 (内核线程通常 cmdline 为空)
-    #         if [ -r "/proc/$proc_pid/cmdline" ] && [ -n "$(cat /proc/$proc_pid/cmdline)" ]; then
-    #             # 尝试获取这个 "隐藏" 进程的 CPU
-    #             cpu=$(ps -p $proc_pid -o %cpu= 2>/dev/null | awk '{print int($1)}')
-    #             # 如果能获取到 CPU 且大于阈值
-    #             if [ ! -z "$cpu" ] && [ "$cpu" -gt "$CPU_THRESHOLD" ]; then
-    #                 # 并且没有被 cpulimit 限制
-    #                 if ! pgrep -f "cpulimit.*-p $proc_pid" > /dev/null; then
-    #                     log "检测到可能的隐藏/短时高CPU进程 PID=$proc_pid (CPU=$cpu%), 尝试限制到 ${LIMIT_RATE}%"
-    #                     cpulimit -p "$proc_pid" -l $LIMIT_RATE -b
-    #                     if [ $? -ne 0 ]; then
-    #                         log "警告：为隐藏进程 PID=$proc_pid 启动 cpulimit 失败"
-    #                     fi
-    #                 fi
-    #             fi
-    #         fi
-    #     fi
-    # done
+    # 等待下一个检查周期
+    sleep "$CHECK_INTERVAL"
 
-    # 等待指定间隔时间后再次检查
-    sleep $CHECK_INTERVAL
-done
+done # while true 结束
 EOF
 
     # 赋予脚本执行权限
@@ -640,9 +642,12 @@ Restart=always
 RestartSec=5
 # 以 root 用户运行
 User=root
-# 将标准输出和标准错误都追加到日志文件
-StandardOutput=append:/var/log/cpu_limit.log
-StandardError=append:/var/log/cpu_limit.log
+# 将标准输出和标准错误都追加到日志文件 (注意: awk脚本内部已重定向日志)
+# StandardOutput=append:/var/log/cpu_limit.log
+# StandardError=append:/var/log/cpu_limit.log
+# 或者直接丢弃脚本的标准输出/错误，因为日志由脚本内部处理
+StandardOutput=null
+StandardError=null
 
 [Install]
 # 定义服务应该在哪个 target 下启用 (multi-user.target 是标准的文本模式运行级别)
@@ -658,6 +663,8 @@ EOF
     log "CPU限制systemd服务配置文件已创建：$CPU_LIMIT_SERVICE"
 
     # 检查服务状态
+    echo -e "${BLUE}等待 CPU 限制服务启动...${RESET}"
+    sleep 3
     if systemctl is-active --quiet cpu_limit.service; then
         echo -e "${GREEN}CPU限制服务已成功启用并启动！${RESET}"
         log "CPU限制服务已成功启用并启动"
@@ -687,7 +694,7 @@ remove_cpu_limit() {
     systemctl daemon-reload
     # 杀掉所有可能还在运行的 cpulimit 进程
     echo -e "${BLUE}停止所有残留的 cpulimit 进程...${RESET}"
-    pkill -f "cpulimit.*-p" # 查找由脚本启动的 cpulimit 进程并杀掉
+    pkill -f "cpulimit .* -p" # 查找由脚本启动的 cpulimit 进程并杀掉
     log "尝试停止所有由监控脚本启动的 cpulimit 进程"
     echo -e "${GREEN}CPU限制服务与脚本已卸载完成。相关的 cpulimit 进程已被尝试停止。${RESET}"
     log "CPU限制服务与脚本已卸载完成。"
