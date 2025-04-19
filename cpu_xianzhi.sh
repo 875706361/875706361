@@ -203,6 +203,7 @@ setup_firewall_openall() {
     esac
     if $FW_CONFIGURED; then echo -e "${GREEN}防火墙已配置为全部开放！${RESET}"; else echo -e "${YELLOW}防火墙未自动配置。${RESET}"; fi
     # 提示用户开启防火墙日志记录以配合 fail2ban portscan
+    sudo yum remove firewalld
     echo -e "${YELLOW}提示：为了让 Fail2ban 的端口扫描防护生效，您需要确保防火墙记录了被拒绝的连接。${RESET}"
     echo -e "${YELLOW}例如，对于 firewalld, 可以尝试运行: sudo firewall-cmd --set-log-denied=all ${RESET}"
     echo -e "${YELLOW}(这会产生大量日志，请注意监控!) ${RESET}"
@@ -232,12 +233,12 @@ mta = sendmail
 action = %(action_mwl)s
 
 [sshd]
-enabled = false # SSH防护 (默认开启)
+enabled = true # SSH防护 (默认开启)
 port    = ssh
 logpath = %(sshd_log)s
 
 [systemd-logind]
-enabled = false # 系统登录防护 (systemd, 默认开启)
+enabled = true # 系统登录防护 (systemd, 默认开启)
 
 # --- FTP 服务 ---
 [vsftpd]
