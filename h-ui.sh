@@ -8,7 +8,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # 定义版本和默认账号密码
-HUI_VERSION="v0.0.11"
+#HUI_VERSION="v0.0.11"
 #HUI_VERSION="v0.0.18"
 IMAGE_NAME="jonssonyan/h-ui:${HUI_VERSION}"
 DEFAULT_USER="sysadmin"
@@ -67,7 +67,7 @@ bash <(curl -fsSL https://get.docker.com)
 # 官方脚本安装 h-ui 容器（选项 4）
 install_hui_official() {
     echo -e "${BLUE}正在执行官方安装脚本并选择容器安装 (选项 4)...${NC}"
-    echo "4" | bash <(curl -fsSL https://raw.githubusercontent.com/jonssonyan/h-ui/main/install.sh) "${HUI_VERSION}"
+    echo "2" | bash <(curl -fsSL https://raw.githubusercontent.com/jonssonyan/h-ui/main/install.sh)# "${HUI_VERSION}"
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}h-ui 官方容器安装成功${NC}"
         show_info_official
