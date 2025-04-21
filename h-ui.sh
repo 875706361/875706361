@@ -8,8 +8,8 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # 定义版本和默认账号密码
-#HUI_VERSION="v0.0.11"
-HUI_VERSION="v0.0.18"
+HUI_VERSION="v0.0.11"
+#HUI_VERSION="v0.0.18"
 IMAGE_NAME="jonssonyan/h-ui:${HUI_VERSION}"
 DEFAULT_USER="sysadmin"
 DEFAULT_PASS="sysadmin"
