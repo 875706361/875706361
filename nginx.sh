@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 脚本版本
-SCRIPT_VERSION="1.6"
+SCRIPT_VERSION="1.7"
 
 # 颜色代码定义
 RED='\033[0;31m'
@@ -335,8 +335,16 @@ configure_https() {
     read -p "是否要将 HTTP 流量自动重定向到 HTTPS？（yes/no）：" redirect_http
     echo -e "${YELLOW}正在配置 HTTPS 访问...${NC}"
 
+    # 获取服务器 IP 地址
+    server_ip=$(curl -s ifconfig.me)
+    if [[ -z "$server_ip" ]]; then
+      echo -e "${RED}错误：无法获取服务器 IP 地址，请检查网络连接。${NC}"
+      return
+    fi
+    echo -e "${GREEN}获取到的服务器 IP 地址：${BLUE}$server_ip${NC}"
+
     # 构建 HTTPS 服务器块配置
-    HTTPS_CONFIG="\nserver {\n    listen 443 ssl http2;\n    listen [::]:443 ssl http2;\n    server_name _;\n\n    ssl_certificate /etc/x-ui/888888666.xyz_chain.pem;\n    ssl_certificate_key /etc/x-ui/888888666.xyz.key;\n\n    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_prefer_server_ciphers off;\n\n    location / {\n        root /CLAY;\n        index index.html;\n    }\n}\n"
+    HTTPS_CONFIG="\nserver {\n    listen 443 ssl http2;\n    listen [::]:443 ssl http2;\n    server_name $server_ip;\n\n    ssl_certificate /etc/x-ui/888888666.xyz_chain.pem;\n    ssl_certificate_key /etc/x-ui/888888666.xyz.key;\n\n    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_prefer_server_ciphers off;\n\n    location / {\n        root /CLAY;\n        index index.html;\n    }\n}\n"
 
     # 将 HTTPS 配置添加到默认的站点配置文件中
     sudo sed -i "$ a $HTTPS_CONFIG" "$DEFAULT_SITE_CONFIG"
@@ -344,8 +352,8 @@ configure_https() {
     if [[ "$redirect_http" == "yes" || "$redirect_http" == "y" ]]; then
       echo -e "${YELLOW}配置 HTTP 重定向到 HTTPS...${NC}"
       # 在 HTTP 服务器块中添加重定向规则
-      sudo sed -i "/listen 80/a\    return 301 https:\$host\$request_uri;\\n" "$DEFAULT_SITE_CONFIG"
-      sudo sed -i "/listen [::]:80/a\    return 301 https:\$host\$request_uri;\\n" "$DEFAULT_SITE_CONFIG"
+      sudo sed -i "/listen 80/a\    return 301 https://\$server_ip\$request_uri;\\n" "$DEFAULT_SITE_CONFIG"
+      sudo sed -i "/listen [::]:80/a\    return 301 https://\$server_ip\$request_uri;\\n" "$DEFAULT_SITE_CONFIG"
     fi
 
     echo -e "${YELLOW}HTTPS 配置已添加到 ${BLUE}$DEFAULT_SITE_CONFIG${NC}。\n正在重启 Nginx 服务...${NC}"
