@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 脚本版本
-SCRIPT_VERSION="1.2"
+SCRIPT_VERSION="1.4"
 
 # 颜色代码定义
 RED='\033[0;31m'
@@ -237,15 +237,46 @@ change_web_root() {
     return
   fi
 
-  read -p "是否将 Nginx 默认网站根目录更改为 /home/clay？（yes/no）：" confirm
+  read -p "是否将 Nginx 默认网站根目录更改为 /CLAY 并创建示例首页？（yes/no）：" confirm
   if [[ "$confirm" == "yes" || "$confirm" == "y" ]]; then
-    echo -e "${YELLOW}正在修改 Nginx 默认网站根目录到 /home/clay，修改配置文件：${BLUE}$DEFAULT_SITE_CONFIG${NC} ...${NC}"
-    sudo sed -i "s/root[[:space:]]\+.\+;/root \/home\/clay;/" "$DEFAULT_SITE_CONFIG"
+    # 检查 /CLAY 是否存在，不存在则创建
+    if [[ ! -d "/CLAY" ]]; then
+      echo -e "${YELLOW}目录 /CLAY 不存在，正在创建...${NC}"
+      sudo mkdir -p /CLAY
+      if [[ $? -ne 0 ]]; then
+        echo -e "${RED}错误：创建目录 /CLAY 失败，请使用 sudo 运行脚本或检查权限。${NC}"
+        return
+      fi
+    fi
+
+    # 创建一个简单的 index.html 文件
+    echo -e "${YELLOW}正在创建示例首页文件 /CLAY/index.html ...${NC}"
+    cat > /CLAY/index.html <<EOL
+<!DOCTYPE html>
+<html>
+<head>
+    <title>欢迎来到 CLAY 的世界！</title>
+</head>
+<body>
+    <h1>Nginx 配置成功！</h1>
+    <p>您的网页文件已放置在 /CLAY 目录下。</p>
+    <p>尽情展示您的创意吧！</p>
+</body>
+</html>
+EOL
+
+    if [[ $? -ne 0 ]]; then
+      echo -e "${RED}警告：创建首页文件 /CLAY/index.html 失败，请检查权限。${NC}"
+    fi
+
+    echo -e "${YELLOW}正在修改 Nginx 默认网站根目录到 /CLAY，修改配置文件：${BLUE}$DEFAULT_SITE_CONFIG${NC} ...${NC}"
+    sudo sed -i "s/root[[:space:]]\+.\+;/root \/CLAY;/" "$DEFAULT_SITE_CONFIG"
 
     if [[ $? -eq 0 ]]; then
-      echo -e "${GREEN}Nginx 默认网站根目录已成功尝试修改为 /home/clay。${NC}"
-      echo -e "${YELLOW}请确保在 /home/clay 目录下存在 index.html 或其他网页文件，并设置正确的权限。${NC}"
-      echo -e "${YELLOW}请重启 Nginx 以应用更改。${NC}"
+      echo -e "${GREEN}Nginx 默认网站根目录已成功修改为 /CLAY。${NC}"
+      echo -e "${YELLOW}已在 /CLAY 目录下创建了一个简单的示例首页文件 index.html。${NC}"
+      echo -e "${YELLOW}正在重启 Nginx 服务以应用更改...${NC}"
+      restart_nginx
     else
       echo -e "${RED}错误：修改 Nginx 默认站点配置文件中的根目录失败。请检查文件权限或配置格式。${NC}"
     fi
@@ -264,7 +295,7 @@ main_menu() {
   echo "4. 停止 Nginx"
   echo "5. 重启 Nginx"
   echo "6. 修改默认端口"
-  echo "7. 修改默认网站根目录为 /home/clay"
+  echo "7. 修改默认网站根目录为 /CLAY 并创建示例首页"
   echo "0. 退出"
   echo "-------------------------"
   read -p "请选择一个选项： " choice
