@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 脚本版本
-SCRIPT_VERSION="1.4"
+SCRIPT_VERSION="1.5"
 
 # 颜色代码定义
 RED='\033[0;31m'
@@ -249,18 +249,56 @@ change_web_root() {
       fi
     fi
 
-    # 创建一个简单的 index.html 文件
+    # 创建一个简单的 index.html 文件，包含居中显示和动态时钟
     echo -e "${YELLOW}正在创建示例首页文件 /CLAY/index.html ...${NC}"
     cat > /CLAY/index.html <<EOL
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
-    <title>欢迎来到 CLAY 的世界！</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>欢迎</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #f0f0f0;
+            margin: 0;
+        }
+        .container {
+            text-align: center;
+            background-color: #fff;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        #time {
+            font-size: 2em;
+            color: #333;
+        }
+    </style>
 </head>
 <body>
-    <h1>Nginx 配置成功！</h1>
-    <p>您的网页文件已放置在 /CLAY 目录下。</p>
-    <p>尽情展示您的创意吧！</p>
+    <div class="container">
+        <h1>欢迎光临</h1>
+        <div id="time"></div>
+    </div>
+
+    <script>
+        function updateTime() {
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const seconds = String(now.getSeconds()).padStart(2, '0');
+            document.getElementById('time').textContent = \`当前时间：\${hours}:\${minutes}:\${seconds}\`;
+        }
+
+        setInterval(updateTime, 1000);
+        updateTime(); // 页面加载时立即显示时间
+    </script>
 </body>
 </html>
 EOL
@@ -274,7 +312,7 @@ EOL
 
     if [[ $? -eq 0 ]]; then
       echo -e "${GREEN}Nginx 默认网站根目录已成功修改为 /CLAY。${NC}"
-      echo -e "${YELLOW}已在 /CLAY 目录下创建了一个简单的示例首页文件 index.html。${NC}"
+      echo -e "${YELLOW}已在 /CLAY 目录下创建了一个简单的示例首页文件 index.html，包含动态时间显示。${NC}"
       echo -e "${YELLOW}正在重启 Nginx 服务以应用更改...${NC}"
       restart_nginx
     else
