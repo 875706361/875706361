@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 脚本版本
-SCRIPT_VERSION="1.7"
+SCRIPT_VERSION="1.8"
 
 # 颜色代码定义
 RED='\033[0;31m'
@@ -351,9 +351,19 @@ configure_https() {
 
     if [[ "$redirect_http" == "yes" || "$redirect_http" == "y" ]]; then
       echo -e "${YELLOW}配置 HTTP 重定向到 HTTPS...${NC}"
-      # 在 HTTP 服务器块中添加重定向规则
-      sudo sed -i "/listen 80/a\    return 301 https://\$server_ip\$request_uri;\\n" "$DEFAULT_SITE_CONFIG"
-      sudo sed -i "/listen [::]:80/a\    return 301 https://\$server_ip\$request_uri;\\n" "$DEFAULT_SITE_CONFIG"
+      # 查找监听 80 的 server 块并添加重定向
+      HTTP_BLOCK_START=$(grep -n "^server {$" "$DEFAULT_SITE_CONFIG" | grep "listen 80" | cut -d':' -f1)
+      if [[ -n "$HTTP_BLOCK_START" ]]; then
+        HTTP_BLOCK_END=$(awk "/^}/" "$DEFAULT_SITE_CONFIG" | tail -n +"$HTTP_BLOCK_START" | head -n 1 | cut -d':' -f1)
+        if [[ -n "$HTTP_BLOCK_END" ]]; then
+          # 在 HTTP server 块的末尾添加 return 指令
+          sudo sed -i "${HTTP_BLOCK_END}i\    return 301 https://\$server_ip\$request_uri;\\n" "$DEFAULT_SITE_CONFIG"
+        else
+          echo -e "${RED}警告：无法准确找到 HTTP server 块的结束位置，请手动检查重定向配置。${NC}"
+        fi
+      else
+        echo -e "${RED}警告：无法找到监听 80 的 HTTP server 块，请手动添加重定向配置。${NC}"
+      fi
     fi
 
     echo -e "${YELLOW}HTTPS 配置已添加到 ${BLUE}$DEFAULT_SITE_CONFIG${NC}。\n正在重启 Nginx 服务...${NC}"
