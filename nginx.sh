@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 脚本版本
-SCRIPT_VERSION="1.5"
+SCRIPT_VERSION="1.6"
 
 # 颜色代码定义
 RED='\033[0;31m'
@@ -323,6 +323,38 @@ EOL
   fi
 }
 
+# 函数：配置 HTTPS (SSL)
+configure_https() {
+  if ! is_nginx_installed; then
+    echo -e "${YELLOW}Nginx 未安装，请先安装。${NC}"
+    return
+  fi
+
+  read -p "是否要为您的网站配置 HTTPS 访问？（yes/no）：" confirm_ssl
+  if [[ "$confirm_ssl" == "yes" || "$confirm_ssl" == "y" ]]; then
+    read -p "是否要将 HTTP 流量自动重定向到 HTTPS？（yes/no）：" redirect_http
+    echo -e "${YELLOW}正在配置 HTTPS 访问...${NC}"
+
+    # 构建 HTTPS 服务器块配置
+    HTTPS_CONFIG="\nserver {\n    listen 443 ssl http2;\n    listen [::]:443 ssl http2;\n    server_name _;\n\n    ssl_certificate /etc/x-ui/888888666.xyz_chain.pem;\n    ssl_certificate_key /etc/x-ui/888888666.xyz.key;\n\n    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_prefer_server_ciphers off;\n\n    location / {\n        root /CLAY;\n        index index.html;\n    }\n}\n"
+
+    # 将 HTTPS 配置添加到默认的站点配置文件中
+    sudo sed -i "$ a $HTTPS_CONFIG" "$DEFAULT_SITE_CONFIG"
+
+    if [[ "$redirect_http" == "yes" || "$redirect_http" == "y" ]]; then
+      echo -e "${YELLOW}配置 HTTP 重定向到 HTTPS...${NC}"
+      # 在 HTTP 服务器块中添加重定向规则
+      sudo sed -i "/listen 80/a\    return 301 https:\$host\$request_uri;\\n" "$DEFAULT_SITE_CONFIG"
+      sudo sed -i "/listen [::]:80/a\    return 301 https:\$host\$request_uri;\\n" "$DEFAULT_SITE_CONFIG"
+    fi
+
+    echo -e "${YELLOW}HTTPS 配置已添加到 ${BLUE}$DEFAULT_SITE_CONFIG${NC}。\n正在重启 Nginx 服务...${NC}"
+    restart_nginx
+  else
+    echo -e "${YELLOW}取消配置 HTTPS 访问。${NC}"
+  fi
+}
+
 # 主菜单函数
 main_menu() {
   echo -e "${BLUE}Nginx 管理脚本 v${SCRIPT_VERSION}${NC}"
@@ -334,6 +366,7 @@ main_menu() {
   echo "5. 重启 Nginx"
   echo "6. 修改默认端口"
   echo "7. 修改默认网站根目录为 /CLAY 并创建示例首页"
+  echo "8. 配置 HTTPS (SSL)"
   echo "0. 退出"
   echo "-------------------------"
   read -p "请选择一个选项： " choice
@@ -353,6 +386,7 @@ while true; do
     5) restart_nginx ;;
     6) change_port ;;
     7) change_web_root ;;
+    8) configure_https ;;
     0) echo -e "${YELLOW}正在退出...${NC}" && exit 0 ;;
     *) echo -e "${RED}无效的选择，请重试。${NC}" ;;
   esac
