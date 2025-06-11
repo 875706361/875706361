@@ -285,7 +285,7 @@ EOF
   fi
 }
 
-# 配置 HTTPS (SSL) 交互式（略，保持你之前版本）
+# 配置 HTTPS (SSL) 交互式（保持你之前版本）
 
 # 新增：安装后自动配置 /CLAY/1 支持视频播放
 setup_video_playback_clay() {
@@ -327,16 +327,15 @@ EOF
   # 备份配置
   cp "$DEFAULT_SITE_CONFIG" "${DEFAULT_SITE_CONFIG}.bak"
 
-  # 判断是否已存在 /1/ location
-  if grep -q "location /1/" "$DEFAULT_SITE_CONFIG"; then
-    echo -e "${YELLOW}配置文件已包含 /1/ 访问配置，无需重复添加。${NC}"
-  else
-    sed -i "/server {/a \
-    \    location /1/ {\
-    \        alias /CLAY/1/;\
-    \        autoindex on;\
-    \    }" "$DEFAULT_SITE_CONFIG"
-  fi
+  # 先删除已有的 location /1/ 配置，避免重复
+  sed -i '/location \/1\//,/\}/d' "$DEFAULT_SITE_CONFIG"
+
+  # 在 server { 行后插入 location /1/ 块
+  sed -i "/server {/a \\
+    location /1/ {\\
+        alias /CLAY/1/;\\
+        autoindex on;\\
+    }" "$DEFAULT_SITE_CONFIG"
 
   nginx -t
   if [[ $? -eq 0 ]]; then
@@ -379,7 +378,7 @@ while true; do
     5) restart_nginx ;;
     6) change_port ;;
     7) change_web_root ;;
-    8) configure_https ;;  # 你之前的函数保持不变
+    8) configure_https ;;  # 你之前的 HTTPS 函数
     0) echo -e "${YELLOW}正在退出...${NC}" && exit 0 ;;
     *) echo -e "${RED}无效选择，请重试。${NC}" ;;
   esac
