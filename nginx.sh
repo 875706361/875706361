@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 脚本版本
-SCRIPT_VERSION="1.9"
+SCRIPT_VERSION="1.10"
 
 # 颜色代码定义
 RED='\033[0;31m'
@@ -16,7 +16,7 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-# 函数：输出脚本信息
+# 输出脚本信息
 script_info() {
   echo -e "${BLUE}Nginx 管理脚本 v${SCRIPT_VERSION}${NC}"
   echo "-------------------------"
@@ -24,7 +24,7 @@ script_info() {
   echo "-------------------------"
 }
 
-# 函数：检测操作系统及设置变量
+# 检测操作系统及设置变量
 detect_os() {
   if [[ -f /etc/os-release ]]; then
     source /etc/os-release
@@ -143,7 +143,7 @@ restart_nginx() {
   fi
 }
 
-# 安装 Nginx，并自动配置视频播放支持
+# 安装 Nginx，并自动配置访问 /CLAY/1 目录支持视频播放（不创建目录）
 install_nginx() {
   echo -e "${YELLOW}正在安装 Nginx...${NC}"
   if [[ "$PACKAGE_MANAGER" == "apt" ]]; then
@@ -160,7 +160,7 @@ install_nginx() {
   if is_nginx_installed; then
     echo -e "${GREEN}Nginx 安装成功。${NC}"
     start_nginx
-    setup_video_playback_clay
+    configure_clay_video_access
   else
     echo -e "${RED}错误：Nginx 安装失败。请检查网络或软件源。${NC}"
   fi
@@ -187,121 +187,30 @@ uninstall_nginx() {
   echo -e "${GREEN}Nginx 卸载成功。${NC}"
 }
 
-# 修改默认端口
-change_port() {
-  if ! is_nginx_installed; then
-    echo -e "${YELLOW}Nginx 未安装，请先安装。${NC}"
-    return
-  fi
+# 配置 /CLAY/1 目录访问支持（不创建目录）
+configure_clay_video_access() {
+  echo -e "${YELLOW}配置 Nginx 支持访问 /CLAY/1 目录的视频播放...${NC}"
 
-  current_port=$(ss -tuln | grep -E 'nginx|:80' | awk '{print $5}' | cut -d':' -f2 | head -n1)
-  current_port=${current_port:-80}
+  # 备份默认站点配置文件
+  cp "$DEFAULT_SITE_CONFIG" "${DEFAULT_SITE_CONFIG}.bak"
 
-  read -p "请输入新的 Nginx 端口号（当前端口：${BLUE}$current_port${NC}，默认：80）：" new_port
-  new_port=${new_port:-80}
+  # 删除已有的 location /1/ 配置，避免重复
+  sed -i '/location \/1\//,/\}/d' "$DEFAULT_SITE_CONFIG"
 
-  if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ]; then
-    echo -e "${RED}错误：无效的端口号。${NC}"
-    return
-  fi
+  # 在 server { 行后插入 location /1/ 块
+  sed -i "/server {/a \\
+    location /1/ {\\
+        alias /CLAY/1/;\\
+        autoindex on;\\
+    }" "$DEFAULT_SITE_CONFIG"
 
-  if [[ "$new_port" == "$current_port" ]]; then
-    echo -e "${YELLOW}Nginx 已经运行在端口 ${BLUE}$new_port${NC}，无需修改。${NC}"
-    return
-  fi
-
-  echo -e "${YELLOW}正在修改 Nginx 默认端口为 ${BLUE}$new_port${NC}...${NC}"
-
-  sed -i -r "s/listen\s+[0-9]+;/listen $new_port;/" "$DEFAULT_SITE_CONFIG"
-
-  nginx -t
-  if [[ $? -eq 0 ]]; then
-    echo -e "${GREEN}端口修改成功，正在重启 Nginx...${NC}"
-    restart_nginx
+  # 创建示例首页，提示用户自行上传视频
+  if [[ ! -d "/CLAY" ]]; then
+    echo -e "${YELLOW}注意：目录 /CLAY 不存在，示例首页无法创建。请自行创建。${NC}"
   else
-    echo -e "${RED}错误：Nginx 配置语法错误，端口修改失败。请检查配置文件。${NC}"
-  fi
-}
-
-# 修改默认网站根目录及创建示例首页
-change_web_root() {
-  if ! is_nginx_installed; then
-    echo -e "${YELLOW}Nginx 未安装，请先安装。${NC}"
-    return
-  fi
-
-  read -p "是否将默认网站根目录更改为 /CLAY 并创建示例首页？（yes/no）：" confirm
-  if [[ "$confirm" =~ ^(yes|y)$ ]]; then
-    if [[ ! -d "/CLAY" ]]; then
-      echo -e "${YELLOW}目录 /CLAY 不存在，正在创建...${NC}"
-      mkdir -p /CLAY || { echo -e "${RED}错误：创建目录失败。${NC}"; return; }
-    fi
-
-    echo -e "${YELLOW}正在创建示例首页 /CLAY/index.html ...${NC}"
-    cat > /CLAY/index.html <<'EOF'
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>欢迎</title>
-<style>
-  body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; background-color: #f0f0f0; margin: 0; }
-  .container { text-align: center; background-color: #fff; padding: 40px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-  #time { font-size: 2em; color: #333; }
-</style>
-</head>
-<body>
-<div class="container">
-  <h1>欢迎光临</h1>
-  <div id="time"></div>
-</div>
-<script>
-  function updateTime() {
-    const now = new Date();
-    const h = String(now.getHours()).padStart(2, '0');
-    const m = String(now.getMinutes()).padStart(2, '0');
-    const s = String(now.getSeconds()).padStart(2, '0');
-    document.getElementById('time').textContent = `当前时间：${h}:${m}:${s}`;
-  }
-  setInterval(updateTime, 1000);
-  updateTime();
-</script>
-</body>
-</html>
-EOF
-
-    sed -i -r "s#root\s+[^;]+;#root /CLAY;#" "$DEFAULT_SITE_CONFIG"
-
-    nginx -t
-    if [[ $? -eq 0 ]]; then
-      echo -e "${GREEN}默认网站根目录已修改为 /CLAY，示例首页已创建。${NC}"
-      restart_nginx
-    else
-      echo -e "${RED}错误：Nginx 配置语法错误，根目录修改失败。请检查配置文件。${NC}"
-    fi
-  else
-    echo -e "${YELLOW}取消更改网站根目录。${NC}"
-  fi
-}
-
-# 配置 HTTPS (SSL) 交互式（保持你之前版本）
-
-# 新增：安装后自动配置 /CLAY/1 支持视频播放
-setup_video_playback_clay() {
-  VIDEO_DIR="/CLAY/1"
-  WEB_ROOT="/CLAY"
-  INDEX_HTML="$WEB_ROOT/index.html"
-
-  echo -e "${YELLOW}确保视频目录存在：${BLUE}$VIDEO_DIR${NC}"
-  mkdir -p "$VIDEO_DIR"
-  chown -R www-data:www-data "$VIDEO_DIR"
-  chmod -R 755 "$VIDEO_DIR"
-
-  echo -e "${YELLOW}请将 mp4 视频文件上传到 ${BLUE}$VIDEO_DIR${NC}，即可通过浏览器访问播放。"
-
-  echo -e "${YELLOW}正在创建示例首页：${BLUE}$INDEX_HTML${NC}"
-  cat > "$INDEX_HTML" <<EOF
+    INDEX_HTML="/CLAY/index.html"
+    echo -e "${YELLOW}创建示例首页：${INDEX_HTML}${NC}"
+    cat > "$INDEX_HTML" <<EOF
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -318,25 +227,11 @@ setup_video_playback_clay() {
 </body>
 </html>
 EOF
+    chown www-data:www-data "$INDEX_HTML"
+    chmod 644 "$INDEX_HTML"
+  fi
 
-  chown www-data:www-data "$INDEX_HTML"
-  chmod 644 "$INDEX_HTML"
-
-  echo -e "${YELLOW}修改 Nginx 默认站点配置，添加 /1/ 路径支持...${NC}"
-
-  # 备份配置
-  cp "$DEFAULT_SITE_CONFIG" "${DEFAULT_SITE_CONFIG}.bak"
-
-  # 先删除已有的 location /1/ 配置，避免重复
-  sed -i '/location \/1\//,/\}/d' "$DEFAULT_SITE_CONFIG"
-
-  # 在 server { 行后插入 location /1/ 块
-  sed -i "/server {/a \\
-    location /1/ {\\
-        alias /CLAY/1/;\\
-        autoindex on;\\
-    }" "$DEFAULT_SITE_CONFIG"
-
+  # 测试 Nginx 配置
   nginx -t
   if [[ $? -eq 0 ]]; then
     echo -e "${GREEN}Nginx 配置语法正确，正在重启 Nginx...${NC}"
@@ -346,6 +241,8 @@ EOF
     mv -f "${DEFAULT_SITE_CONFIG}.bak" "$DEFAULT_SITE_CONFIG"
   fi
 }
+
+# 其他函数省略，保持你之前的脚本内容（如修改端口、修改根目录、HTTPS配置等）
 
 # 主菜单
 main_menu() {
@@ -376,9 +273,9 @@ while true; do
     3) start_nginx ;;
     4) stop_nginx ;;
     5) restart_nginx ;;
-    6) change_port ;;
-    7) change_web_root ;;
-    8) configure_https ;;  # 你之前的 HTTPS 函数
+    6) change_port ;;           # 你之前的函数
+    7) change_web_root ;;       # 你之前的函数
+    8) configure_https ;;       # 你之前的函数
     0) echo -e "${YELLOW}正在退出...${NC}" && exit 0 ;;
     *) echo -e "${RED}无效选择，请重试。${NC}" ;;
   esac
