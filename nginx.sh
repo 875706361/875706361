@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 脚本版本
-SCRIPT_VERSION="1.8"
+SCRIPT_VERSION="1.9"
 
 # 颜色代码定义
 RED='\033[0;31m'
@@ -9,6 +9,12 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # 无颜色
+
+# 检查是否以 root 运行
+if [[ $EUID -ne 0 ]]; then
+  echo -e "${RED}错误：请以 root 用户运行此脚本。${NC}"
+  exit 1
+fi
 
 # 函数：输出脚本信息
 script_info() {
@@ -18,7 +24,7 @@ script_info() {
   echo "-------------------------"
 }
 
-# 函数：检测操作系统并设置包管理器及相关路径
+# 函数：检测操作系统及设置变量
 detect_os() {
   if [[ -f /etc/os-release ]]; then
     source /etc/os-release
@@ -76,6 +82,7 @@ detect_os() {
       exit 1
       ;;
   esac
+
   echo -e "${GREEN}检测到操作系统：${BLUE}$OS${NC}"
   echo -e "${GREEN}使用的包管理器：${BLUE}$PACKAGE_MANAGER${NC}"
   echo -e "${GREEN}使用的服务管理器：${BLUE}$SERVICE_MANAGER${NC}"
@@ -86,87 +93,77 @@ detect_os() {
   echo -e "${GREEN}Nginx 默认站点配置文件路径：${BLUE}$DEFAULT_SITE_CONFIG${NC}"
 }
 
-# 函数：检查 Nginx 是否已安装
+# 检查 Nginx 是否安装
 is_nginx_installed() {
   command -v nginx >/dev/null 2>&1
 }
 
-# 函数：安装 Nginx
+# 安装 Nginx
 install_nginx() {
   echo -e "${YELLOW}正在安装 Nginx...${NC}"
   if [[ "$PACKAGE_MANAGER" == "apt" ]]; then
-    echo -e "${YELLOW}更新软件包列表...${NC}"
-    sudo apt update
-    echo -e "${YELLOW}使用 apt 安装 Nginx 及其依赖...${NC}"
-    sudo apt install -y nginx
+    apt update
+    apt install -y nginx
   elif [[ "$PACKAGE_MANAGER" == "yum" ]]; then
-    echo -e "${YELLOW}使用 yum 安装 Nginx 及其依赖...${NC}"
-    sudo yum install -y nginx
+    yum install -y nginx
   elif [[ "$PACKAGE_MANAGER" == "zypper" ]]; then
-    echo -e "${YELLOW}使用 zypper 安装 Nginx 及其依赖...${NC}"
-    sudo zypper --non-interactive install nginx
+    zypper --non-interactive install nginx
   elif [[ "$PACKAGE_MANAGER" == "pacman" ]]; then
-    echo -e "${YELLOW}使用 pacman 安装 Nginx 及其依赖...${NC}"
-    sudo pacman -S --noconfirm nginx
+    pacman -S --noconfirm nginx
   fi
 
   if is_nginx_installed; then
     echo -e "${GREEN}Nginx 安装成功。${NC}"
     start_nginx
   else
-    echo -e "${RED}错误：Nginx 安装失败。请检查您的网络连接或软件源配置。${NC}"
+    echo -e "${RED}错误：Nginx 安装失败。请检查网络或软件源。${NC}"
   fi
 }
 
-# 函数：卸载 Nginx
+# 卸载 Nginx
 uninstall_nginx() {
   if ! is_nginx_installed; then
-    echo -e "${YELLOW}Nginx 当前未安装。${NC}"
+    echo -e "${YELLOW}Nginx 未安装。${NC}"
     return
   fi
 
   echo -e "${YELLOW}正在卸载 Nginx...${NC}"
   if [[ "$PACKAGE_MANAGER" == "apt" ]]; then
-    echo -e "${YELLOW}移除 Nginx 软件包...${NC}"
-    sudo apt purge -y nginx nginx-common nginx-core
-    echo -e "${YELLOW}移除不再需要的依赖包...${NC}"
-    sudo apt autoremove -y
+    apt purge -y nginx nginx-common nginx-core
+    apt autoremove -y
   elif [[ "$PACKAGE_MANAGER" == "yum" ]]; then
-    echo -e "${YELLOW}移除 Nginx 软件包...${NC}"
-    sudo yum remove -y nginx
+    yum remove -y nginx
   elif [[ "$PACKAGE_MANAGER" == "zypper" ]]; then
-    echo -e "${YELLOW}移除 Nginx 软件包...${NC}"
-    sudo zypper --non-interactive remove nginx
+    zypper --non-interactive remove nginx
   elif [[ "$PACKAGE_MANAGER" == "pacman" ]]; then
-    echo -e "${YELLOW}移除 Nginx 软件包...${NC}"
-    sudo pacman -R --noconfirm nginx
+    pacman -R --noconfirm nginx
   fi
   echo -e "${GREEN}Nginx 卸载成功。${NC}"
 }
 
-# 函数：启动 Nginx
+# 启动 Nginx
 start_nginx() {
   if ! is_nginx_installed; then
     echo -e "${YELLOW}Nginx 未安装，请先安装。${NC}"
     return
   fi
   echo -e "${YELLOW}正在启动 Nginx 服务...${NC}"
-  sudo "$SERVICE_MANAGER" start nginx
+  $SERVICE_MANAGER start nginx
   if [[ $? -eq 0 ]]; then
     echo -e "${GREEN}Nginx 启动成功。${NC}"
   else
-    echo -e "${RED}错误：启动 Nginx 失败。请检查您的 Nginx 配置或系统日志。${NC}"
+    echo -e "${RED}错误：启动 Nginx 失败。请检查配置或日志。${NC}"
   fi
 }
 
-# 函数：停止 Nginx
+# 停止 Nginx
 stop_nginx() {
   if ! is_nginx_installed; then
     echo -e "${YELLOW}Nginx 未安装。${NC}"
     return
   fi
   echo -e "${YELLOW}正在停止 Nginx 服务...${NC}"
-  sudo "$SERVICE_MANAGER" stop nginx
+  $SERVICE_MANAGER stop nginx
   if [[ $? -eq 0 ]]; then
     echo -e "${GREEN}Nginx 停止成功。${NC}"
   else
@@ -174,206 +171,219 @@ stop_nginx() {
   fi
 }
 
-# 函数：重启 Nginx
+# 重启 Nginx
 restart_nginx() {
   if ! is_nginx_installed; then
     echo -e "${YELLOW}Nginx 未安装。${NC}"
     return
   fi
   echo -e "${YELLOW}正在重启 Nginx 服务...${NC}"
-  sudo "$SERVICE_MANAGER" restart nginx
+  $SERVICE_MANAGER restart nginx
   if [[ $? -eq 0 ]]; then
     echo -e "${GREEN}Nginx 重启成功。${NC}"
   else
-    echo -e "${RED}错误：重启 Nginx 失败。请检查您的 Nginx 配置或系统日志。${NC}"
+    echo -e "${RED}错误：重启 Nginx 失败。请检查配置或日志。${NC}"
   fi
 }
 
-# 函数：修改 Nginx 默认端口
+# 修改默认端口
 change_port() {
   if ! is_nginx_installed; then
     echo -e "${YELLOW}Nginx 未安装，请先安装。${NC}"
     return
   fi
 
-  # 获取当前监听端口
-  current_port=$(sudo netstat -tuln | grep LISTEN | grep nginx | awk '{print $4}' | cut -d':' -f2 | head -n 1)
+  # 尝试用 ss 查找当前端口，兼容性更好
+  current_port=$(ss -tuln | grep -E 'nginx|:80' | awk '{print $5}' | cut -d':' -f2 | head -n1)
   if [[ -z "$current_port" ]]; then
-    current_port="80" # 默认值
+    current_port="80"
   fi
 
   read -p "请输入新的 Nginx 端口号（当前端口：${BLUE}$current_port${NC}，默认：80）：" new_port
-  if [[ -z "$new_port" ]]; then
-    new_port="80"
-  fi
+  new_port=${new_port:-80}
 
-  if [[ ! "$new_port" =~ ^[0-9]+$ ]]; then
+  if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ]; then
     echo -e "${RED}错误：无效的端口号。${NC}"
     return
   fi
 
-  if [[ "$new_port" -eq "$current_port" ]]; then
+  if [[ "$new_port" == "$current_port" ]]; then
     echo -e "${YELLOW}Nginx 已经运行在端口 ${BLUE}$new_port${NC}，无需修改。${NC}"
     return
   fi
 
-  echo -e "${YELLOW}正在将 Nginx 端口修改为 ${BLUE}$new_port${NC}，修改配置文件：${BLUE}$CONFIG_FILE${NC} ...${NC}"
+  echo -e "${YELLOW}正在修改 Nginx 默认端口为 ${BLUE}$new_port${NC}...${NC}"
 
-  # 使用 sed 替换 listen 指令 - 这可能需要根据不同的配置进行调整
-  sudo sed -i "s/listen[[:space:]]*[0-9]\+;/listen $new_port;/" "$CONFIG_FILE"
+  # 只修改默认站点配置文件中的 listen 指令
+  sed -i -r "s/listen\s+[0-9]+;/listen $new_port;/" "$DEFAULT_SITE_CONFIG"
 
+  # 检查配置是否正确
+  nginx -t
   if [[ $? -eq 0 ]]; then
-    echo -e "${GREEN}Nginx 主配置文件中的端口已成功尝试修改为 ${BLUE}$new_port${NC}。${NC}"
-    echo -e "${YELLOW}请重启 Nginx 以应用更改。${NC}"
+    echo -e "${GREEN}端口修改成功，正在重启 Nginx...${NC}"
+    restart_nginx
   else
-    echo -e "${RED}错误：修改 Nginx 主配置文件中的端口失败。请检查文件权限或配置格式。${NC}"
+    echo -e "${RED}错误：Nginx 配置语法错误，端口修改失败。请检查配置文件。${NC}"
   fi
 }
 
-# 函数：修改 Nginx 默认网站根目录
+# 修改默认网站根目录及创建示例首页
 change_web_root() {
   if ! is_nginx_installed; then
     echo -e "${YELLOW}Nginx 未安装，请先安装。${NC}"
     return
   fi
 
-  read -p "是否将 Nginx 默认网站根目录更改为 /CLAY 并创建示例首页？（yes/no）：" confirm
-  if [[ "$confirm" == "yes" || "$confirm" == "y" ]]; then
-    # 检查 /CLAY 是否存在，不存在则创建
+  read -p "是否将默认网站根目录更改为 /CLAY 并创建示例首页？（yes/no）：" confirm
+  if [[ "$confirm" =~ ^(yes|y)$ ]]; then
     if [[ ! -d "/CLAY" ]]; then
       echo -e "${YELLOW}目录 /CLAY 不存在，正在创建...${NC}"
-      sudo mkdir -p /CLAY
-      if [[ $? -ne 0 ]]; then
-        echo -e "${RED}错误：创建目录 /CLAY 失败，请使用 sudo 运行脚本或检查权限。${NC}"
-        return
-      fi
+      mkdir -p /CLAY || { echo -e "${RED}错误：创建目录失败。${NC}"; return; }
     fi
 
-    # 创建一个简单的 index.html 文件，包含居中显示和动态时钟
-    echo -e "${YELLOW}正在创建示例首页文件 /CLAY/index.html ...${NC}"
-    cat > /CLAY/index.html <<EOL
+    echo -e "${YELLOW}正在创建示例首页 /CLAY/index.html ...${NC}"
+    cat > /CLAY/index.html <<'EOF'
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>欢迎</title>
-    <style>
-        body {
-            font-family: sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            background-color: #f0f0f0;
-            margin: 0;
-        }
-        .container {
-            text-align: center;
-            background-color: #fff;
-            padding: 40px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        }
-        #time {
-            font-size: 2em;
-            color: #333;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>欢迎</title>
+<style>
+  body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; background-color: #f0f0f0; margin: 0; }
+  .container { text-align: center; background-color: #fff; padding: 40px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+  #time { font-size: 2em; color: #333; }
+</style>
 </head>
 <body>
-    <div class="container">
-        <h1>欢迎光临</h1>
-        <div id="time"></div>
-    </div>
-
-    <script>
-        function updateTime() {
-            const now = new Date();
-            const hours = String(now.getHours()).padStart(2, '0');
-            const minutes = String(now.getMinutes()).padStart(2, '0');
-            const seconds = String(now.getSeconds()).padStart(2, '0');
-            document.getElementById('time').textContent = \`当前时间：\${hours}:\${minutes}:\${seconds}\`;
-        }
-
-        setInterval(updateTime, 1000);
-        updateTime(); // 页面加载时立即显示时间
-    </script>
+<div class="container">
+  <h1>欢迎光临</h1>
+  <div id="time"></div>
+</div>
+<script>
+  function updateTime() {
+    const now = new Date();
+    const h = String(now.getHours()).padStart(2, '0');
+    const m = String(now.getMinutes()).padStart(2, '0');
+    const s = String(now.getSeconds()).padStart(2, '0');
+    document.getElementById('time').textContent = `当前时间：${h}:${m}:${s}`;
+  }
+  setInterval(updateTime, 1000);
+  updateTime();
+</script>
 </body>
 </html>
-EOL
+EOF
 
-    if [[ $? -ne 0 ]]; then
-      echo -e "${RED}警告：创建首页文件 /CLAY/index.html 失败，请检查权限。${NC}"
-    fi
+    # 修改默认站点配置文件 root 路径
+    sed -i -r "s#root\s+[^;]+;#root /CLAY;#" "$DEFAULT_SITE_CONFIG"
 
-    echo -e "${YELLOW}正在修改 Nginx 默认网站根目录到 /CLAY，修改配置文件：${BLUE}$DEFAULT_SITE_CONFIG${NC} ...${NC}"
-    sudo sed -i "s/root[[:space:]]\+.\+;/root \/CLAY;/" "$DEFAULT_SITE_CONFIG"
-
+    nginx -t
     if [[ $? -eq 0 ]]; then
-      echo -e "${GREEN}Nginx 默认网站根目录已成功修改为 /CLAY。${NC}"
-      echo -e "${YELLOW}已在 /CLAY 目录下创建了一个简单的示例首页文件 index.html，包含动态时间显示。${NC}"
-      echo -e "${YELLOW}正在重启 Nginx 服务以应用更改...${NC}"
+      echo -e "${GREEN}默认网站根目录已修改为 /CLAY，示例首页已创建。${NC}"
       restart_nginx
     else
-      echo -e "${RED}错误：修改 Nginx 默认站点配置文件中的根目录失败。请检查文件权限或配置格式。${NC}"
+      echo -e "${RED}错误：Nginx 配置语法错误，根目录修改失败。请检查配置文件。${NC}"
     fi
   else
     echo -e "${YELLOW}取消更改网站根目录。${NC}"
   fi
 }
 
-# 函数：配置 HTTPS (SSL)
+# 配置 HTTPS (SSL)
 configure_https() {
   if ! is_nginx_installed; then
     echo -e "${YELLOW}Nginx 未安装，请先安装。${NC}"
     return
   fi
 
-  read -p "是否要为您的网站配置 HTTPS 访问？（yes/no）：" confirm_ssl
-  if [[ "$confirm_ssl" == "yes" || "$confirm_ssl" == "y" ]]; then
-    read -p "是否要将 HTTP 流量自动重定向到 HTTPS？（yes/no）：" redirect_http
-    echo -e "${YELLOW}正在配置 HTTPS 访问...${NC}"
+  read -p "是否为网站配置 HTTPS？（yes/no）：" confirm_ssl
+  if [[ ! "$confirm_ssl" =~ ^(yes|y)$ ]]; then
+    echo -e "${YELLOW}取消配置 HTTPS。${NC}"
+    return
+  fi
 
-    # 获取服务器 IP 地址
-    server_ip=$(curl -s ifconfig.me)
-    if [[ -z "$server_ip" ]]; then
-      echo -e "${RED}错误：无法获取服务器 IP 地址，请检查网络连接。${NC}"
-      return
-    fi
-    echo -e "${GREEN}获取到的服务器 IP 地址：${BLUE}$server_ip${NC}"
+  # 让用户输入域名或 IP
+  read -p "请输入您的域名（或服务器 IP，建议使用域名）： " domain
+  if [[ -z "$domain" ]]; then
+    echo -e "${RED}错误：域名不能为空。${NC}"
+    return
+  fi
 
-    # 构建 HTTPS 服务器块配置
-    HTTPS_CONFIG="\nserver {\n    listen 443 ssl http2;\n    listen [::]:443 ssl http2;\n    server_name $server_ip;\n\n    ssl_certificate /etc/x-ui/888888666.xyz_chain.pem;\n    ssl_certificate_key /etc/x-ui/888888666.xyz.key;\n\n    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_prefer_server_ciphers off;\n\n    location / {\n        root /CLAY;\n        index index.html;\n    }\n}\n"
+  # 让用户输入证书路径
+  read -p "请输入 SSL 证书文件路径（PEM 格式）： " cert_path
+  if [[ ! -f "$cert_path" ]]; then
+    echo -e "${RED}错误：证书文件不存在。${NC}"
+    return
+  fi
 
-    # 将 HTTPS 配置添加到默认的站点配置文件中
-    sudo sed -i "$ a $HTTPS_CONFIG" "$DEFAULT_SITE_CONFIG"
+  read -p "请输入 SSL 私钥文件路径（KEY 格式）： " key_path
+  if [[ ! -f "$key_path" ]]; then
+    echo -e "${RED}错误：私钥文件不存在。${NC}"
+    return
+  fi
 
-    if [[ "$redirect_http" == "yes" || "$redirect_http" == "y" ]]; then
-      echo -e "${YELLOW}配置 HTTP 重定向到 HTTPS...${NC}"
-      # 查找监听 80 的 server 块并添加重定向
-      HTTP_BLOCK_START=$(grep -n "^server {$" "$DEFAULT_SITE_CONFIG" | grep "listen 80" | cut -d':' -f1)
-      if [[ -n "$HTTP_BLOCK_START" ]]; then
-        HTTP_BLOCK_END=$(awk "/^}/" "$DEFAULT_SITE_CONFIG" | tail -n +"$HTTP_BLOCK_START" | head -n 1 | cut -d':' -f1)
-        if [[ -n "$HTTP_BLOCK_END" ]]; then
-          # 在 HTTP server 块的末尾添加 return 指令
-          sudo sed -i "${HTTP_BLOCK_END}i\    return 301 https://\$server_ip\$request_uri;\\n" "$DEFAULT_SITE_CONFIG"
-        else
-          echo -e "${RED}警告：无法准确找到 HTTP server 块的结束位置，请手动检查重定向配置。${NC}"
-        fi
-      else
-        echo -e "${RED}警告：无法找到监听 80 的 HTTP server 块，请手动添加重定向配置。${NC}"
-      fi
-    fi
+  read -p "是否启用 HTTP 自动重定向到 HTTPS？（yes/no）：" redirect_http
 
-    echo -e "${YELLOW}HTTPS 配置已添加到 ${BLUE}$DEFAULT_SITE_CONFIG${NC}。\n正在重启 Nginx 服务...${NC}"
+  # 创建单独的 HTTPS 配置文件，避免直接修改默认配置文件导致混乱
+  ssl_conf_file="${SITES_AVAILABLE_DIR}/ssl_${domain}.conf"
+
+  cat > "$ssl_conf_file" <<EOF
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${domain};
+
+    ssl_certificate ${cert_path};
+    ssl_certificate_key ${key_path};
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+
+    root /CLAY;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+
+  # 启用该站点配置（如果有 sites-enabled 目录）
+  if [[ -d "$SITES_ENABLED_DIR" ]]; then
+    ln -sf "$ssl_conf_file" "${SITES_ENABLED_DIR}/ssl_${domain}.conf"
+  fi
+
+  # 配置 HTTP 重定向（修改默认站点配置文件）
+  if [[ "$redirect_http" =~ ^(yes|y)$ ]]; then
+    # 备份默认配置文件
+    cp "$DEFAULT_SITE_CONFIG" "${DEFAULT_SITE_CONFIG}.bak"
+
+    # 修改默认配置文件，添加重定向 server 块
+    cat > "$DEFAULT_SITE_CONFIG" <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${domain};
+
+    return 301 https://\$host\$request_uri;
+}
+EOF
+  fi
+
+  # 检查配置语法
+  nginx -t
+  if [[ $? -eq 0 ]]; then
+    echo -e "${GREEN}HTTPS 配置成功，正在重启 Nginx...${NC}"
     restart_nginx
   else
-    echo -e "${YELLOW}取消配置 HTTPS 访问。${NC}"
+    echo -e "${RED}错误：Nginx 配置语法错误，请检查证书路径和配置文件。${NC}"
+    # 恢复默认配置文件（如果备份存在）
+    [[ -f "${DEFAULT_SITE_CONFIG}.bak" ]] && mv -f "${DEFAULT_SITE_CONFIG}.bak" "$DEFAULT_SITE_CONFIG"
   fi
 }
 
-# 主菜单函数
+# 主菜单
 main_menu() {
   echo -e "${BLUE}Nginx 管理脚本 v${SCRIPT_VERSION}${NC}"
   echo "-------------------------"
@@ -390,7 +400,7 @@ main_menu() {
   read -p "请选择一个选项： " choice
 }
 
-# 主脚本执行
+# 主程序
 script_info
 detect_os
 
@@ -406,6 +416,6 @@ while true; do
     7) change_web_root ;;
     8) configure_https ;;
     0) echo -e "${YELLOW}正在退出...${NC}" && exit 0 ;;
-    *) echo -e "${RED}无效的选择，请重试。${NC}" ;;
+    *) echo -e "${RED}无效选择，请重试。${NC}" ;;
   esac
 done
