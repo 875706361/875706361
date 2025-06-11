@@ -74,7 +74,71 @@ detect_os() {
       ;;
   esac
   
+  # 检测实际配置文件位置
+  find_nginx_config_file
+  
   echo -e "${GREEN}使用包管理器：${BLUE}$PACKAGE_MANAGER${NC}"
+  echo -e "${GREEN}Nginx配置文件：${BLUE}$DEFAULT_SITE_CONFIG${NC}"
+}
+
+# 查找Nginx配置文件的实际位置
+find_nginx_config_file() {
+  # 检查默认路径是否存在
+  if [[ -f "$DEFAULT_SITE_CONFIG" ]]; then
+    return 0
+  fi
+  
+  # 如果默认路径不存在，尝试其他常见位置
+  local possible_locations=(
+    "/etc/nginx/sites-available/default"
+    "/etc/nginx/conf.d/default.conf"
+    "/etc/nginx/default.conf"
+    "/etc/nginx/conf.d/default"
+    "/etc/nginx/sites-enabled/default"
+    "/etc/nginx/nginx.conf"
+  )
+  
+  for location in "${possible_locations[@]}"; do
+    if [[ -f "$location" ]]; then
+      DEFAULT_SITE_CONFIG="$location"
+      echo -e "${YELLOW}找到Nginx配置文件：${DEFAULT_SITE_CONFIG}${NC}"
+      return 0
+    fi
+  done
+  
+  # 如果找不到现有配置文件，使用nginx.conf作为备用
+  if [[ -f "/etc/nginx/nginx.conf" ]]; then
+    DEFAULT_SITE_CONFIG="/etc/nginx/nginx.conf"
+    echo -e "${YELLOW}使用主Nginx配置文件：${DEFAULT_SITE_CONFIG}${NC}"
+    return 0
+  fi
+  
+  # 如果仍然找不到，创建一个新的配置文件
+  if [[ -d "/etc/nginx/conf.d" ]]; then
+    DEFAULT_SITE_CONFIG="/etc/nginx/conf.d/default.conf"
+  elif [[ -d "/etc/nginx/sites-available" ]]; then
+    DEFAULT_SITE_CONFIG="/etc/nginx/sites-available/default"
+  else
+    mkdir -p /etc/nginx/conf.d
+    DEFAULT_SITE_CONFIG="/etc/nginx/conf.d/default.conf"
+  fi
+  
+  echo -e "${YELLOW}未找到现有的Nginx配置文件，将创建：${DEFAULT_SITE_CONFIG}${NC}"
+  
+  # 创建一个基本配置
+  cat > "$DEFAULT_SITE_CONFIG" <<'EOF'
+server {
+    listen 80;
+    server_name localhost;
+
+    location / {
+        root /usr/share/nginx/html;
+        index index.html index.htm;
+    }
+}
+EOF
+
+  return 0
 }
 
 install_dependencies() {
@@ -210,17 +274,132 @@ install_nginx() {
 
 uninstall_nginx() {
   echo -e "${YELLOW}卸载 Nginx...${NC}"
-  if [[ "$PACKAGE_MANAGER" == "apt" ]]; then
-    apt purge -y nginx nginx-common nginx-core
-    apt autoremove -y
-  elif [[ "$PACKAGE_MANAGER" == "yum" ]]; then
-    yum remove -y nginx
-  elif [[ "$PACKAGE_MANAGER" == "zypper" ]]; then
-    zypper --non-interactive remove nginx
-  elif [[ "$PACKAGE_MANAGER" == "pacman" ]]; then
-    pacman -R --noconfirm nginx
+  
+  # 询问用户是否确认卸载
+  read -p "确定要完全卸载Nginx及其所有配置文件吗? (yes/no): " confirm
+  if [[ ! "$confirm" =~ ^(yes|y)$ ]]; then
+    echo -e "${YELLOW}卸载已取消${NC}"
+    return 0
   fi
-  echo -e "${GREEN}卸载完成。${NC}"
+
+  # 停止Nginx服务
+  echo -e "${YELLOW}停止Nginx服务...${NC}"
+  systemctl stop nginx 2>/dev/null
+  service nginx stop 2>/dev/null
+  killall -9 nginx 2>/dev/null
+  
+  # 禁用Nginx服务
+  echo -e "${YELLOW}禁用Nginx服务...${NC}"
+  systemctl disable nginx 2>/dev/null
+  
+  # 根据不同的包管理器卸载已安装的包
+  echo -e "${YELLOW}使用包管理器卸载Nginx包...${NC}"
+  local removed=0
+  if [[ "$PACKAGE_MANAGER" == "apt" ]]; then
+    apt purge -y nginx nginx-common nginx-core nginx-full 2>/dev/null
+    apt autoremove -y 2>/dev/null
+    removed=1
+  elif [[ "$PACKAGE_MANAGER" == "yum" ]]; then
+    yum remove -y nginx 2>/dev/null
+    removed=1
+  elif [[ "$PACKAGE_MANAGER" == "zypper" ]]; then
+    zypper --non-interactive remove nginx 2>/dev/null
+    removed=1
+  elif [[ "$PACKAGE_MANAGER" == "pacman" ]]; then
+    pacman -R --noconfirm nginx 2>/dev/null
+    removed=1
+  fi
+  
+  # 移除编译安装的Nginx可执行文件和相关资源
+  echo -e "${YELLOW}移除编译安装的Nginx文件...${NC}"
+  if [[ -f /usr/sbin/nginx ]]; then
+    rm -f /usr/sbin/nginx
+    echo -e "已删除: ${BLUE}/usr/sbin/nginx${NC}"
+  fi
+  
+  # 清理Nginx配置目录
+  echo -e "${YELLOW}清理Nginx配置目录...${NC}"
+  if [[ -d /etc/nginx ]]; then
+    read -p "是否删除所有Nginx配置文件？这将删除 /etc/nginx 目录下的所有文件 (yes/no): " del_config
+    if [[ "$del_config" =~ ^(yes|y)$ ]]; then
+      rm -rf /etc/nginx
+      echo -e "已删除: ${BLUE}/etc/nginx${NC}"
+    else
+      echo -e "${YELLOW}保留Nginx配置文件${NC}"
+    fi
+  fi
+  
+  # 清理日志目录
+  echo -e "${YELLOW}清理Nginx日志目录...${NC}"
+  if [[ -d /var/log/nginx ]]; then
+    rm -rf /var/log/nginx
+    echo -e "已删除: ${BLUE}/var/log/nginx${NC}"
+  fi
+  
+  # 删除systemd服务文件
+  echo -e "${YELLOW}删除系统服务文件...${NC}"
+  if [[ -f /lib/systemd/system/nginx.service ]]; then
+    rm -f /lib/systemd/system/nginx.service
+    systemctl daemon-reload
+    echo -e "已删除: ${BLUE}/lib/systemd/system/nginx.service${NC}"
+  fi
+  
+  # 删除编译目录
+  echo -e "${YELLOW}清理编译目录...${NC}"
+  if [[ -d /usr/local/src/nginx_build ]]; then
+    rm -rf /usr/local/src/nginx_build
+    echo -e "已删除: ${BLUE}/usr/local/src/nginx_build${NC}"
+  fi
+  
+  # 删除其他常见的Nginx文件
+  echo -e "${YELLOW}搜索并删除其他Nginx文件...${NC}"
+  local nginx_dirs=(
+    "/var/cache/nginx"
+    "/var/www/html"
+    "/usr/lib/nginx"
+    "/usr/share/nginx"
+    "/usr/local/nginx"
+    "/etc/default/nginx"
+    "/etc/logrotate.d/nginx"
+  )
+  
+  for dir in "${nginx_dirs[@]}"; do
+    if [[ -d "$dir" || -f "$dir" ]]; then
+      echo -e "发现: ${BLUE}$dir${NC}"
+      read -p "是否删除此Nginx关联文件/目录? (yes/no): " del_dir
+      if [[ "$del_dir" =~ ^(yes|y)$ ]]; then
+        rm -rf "$dir"
+        echo -e "已删除: ${BLUE}$dir${NC}"
+      else
+        echo -e "${YELLOW}保留: $dir${NC}"
+      fi
+    fi
+  done
+  
+  # 删除用户自定义的CLAY目录（如果存在）
+  if [[ -d /CLAY ]]; then
+    read -p "是否删除 /CLAY 目录及其中的内容? (yes/no): " del_clay
+    if [[ "$del_clay" =~ ^(yes|y)$ ]]; then
+      rm -rf /CLAY
+      echo -e "已删除: ${BLUE}/CLAY${NC}"
+    else
+      echo -e "${YELLOW}保留: /CLAY${NC}"
+    fi
+  fi
+  
+  # 清理系统缓存
+  echo -e "${YELLOW}更新系统缓存...${NC}"
+  ldconfig 2>/dev/null
+  
+  # 检查卸载结果
+  if ! command -v nginx &>/dev/null; then
+    echo -e "${GREEN}Nginx 已成功卸载！${NC}"
+  else
+    echo -e "${RED}警告：Nginx 可能未完全卸载，请检查系统${NC}"
+    echo -e "Nginx可执行文件路径: $(which nginx 2>/dev/null || echo '未找到')"
+  fi
+  
+  echo -e "${GREEN}卸载过程完成。${NC}"
 }
 
 start_nginx() {
@@ -367,10 +546,26 @@ change_port() {
 change_web_root() {
   read -p "是否将默认网站根目录更改为 /CLAY 并创建示例首页？（yes/no）：" confirm
   if [[ "$confirm" =~ ^(yes|y)$ ]]; then
+    # 确保配置文件存在
+    if [[ ! -f "$DEFAULT_SITE_CONFIG" ]]; then
+      echo -e "${YELLOW}Nginx配置文件 $DEFAULT_SITE_CONFIG 不存在，尝试查找或创建...${NC}"
+      find_nginx_config_file
+    fi
+    
+    # 确保目录存在
     if [[ ! -d "/CLAY" ]]; then
-      mkdir -p /CLAY || { echo -e "${RED}创建目录 /CLAY 失败${NC}"; return; }
+      mkdir -p /CLAY || { handle_error "创建目录 /CLAY 失败" 0; return; }
     fi
 
+    # 备份配置文件
+    local backup_file="${DEFAULT_SITE_CONFIG}.bak.$(date +%Y%m%d%H%M%S)"
+    if ! cp "$DEFAULT_SITE_CONFIG" "$backup_file"; then
+      echo -e "${RED}无法备份配置文件 $DEFAULT_SITE_CONFIG${NC}"
+    else
+      echo -e "${GREEN}配置文件已备份为：${backup_file}${NC}"
+    fi
+
+    # 创建示例首页
     cat > /CLAY/index.html <<'EOF'
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -379,7 +574,56 @@ change_web_root() {
 </html>
 EOF
 
-    sed -i -r "s#root\s+[^;]+;#root /CLAY;#" "$DEFAULT_SITE_CONFIG"
+    chmod 644 /CLAY/index.html
+    
+    # 如果是主配置文件，处理方式不同
+    if [[ "$DEFAULT_SITE_CONFIG" == "/etc/nginx/nginx.conf" ]]; then
+      # 创建额外的配置文件
+      local site_config="/etc/nginx/conf.d/default.conf"
+      mkdir -p /etc/nginx/conf.d
+      
+      cat > "$site_config" <<EOF
+server {
+    listen 80;
+    server_name localhost;
+    
+    location / {
+        root /CLAY;
+        index index.html index.htm;
+    }
+}
+EOF
+      
+      # 确保主配置文件包含conf.d目录
+      if ! grep -q "include.*conf.d" "/etc/nginx/nginx.conf"; then
+        # 查找http块结束位置
+        local http_end_line=$(grep -n "}" "/etc/nginx/nginx.conf" | grep -B1 "http" | head -1 | cut -d: -f1)
+        if [[ -n "$http_end_line" ]]; then
+          # 在http块结束前插入include指令
+          sed -i "${http_end_line}i\\    include /etc/nginx/conf.d/*.conf;" "/etc/nginx/nginx.conf"
+          echo -e "${GREEN}已将conf.d目录添加到主配置中${NC}"
+        fi
+      fi
+      
+      DEFAULT_SITE_CONFIG="$site_config"
+      echo -e "${GREEN}已创建新的网站配置文件：${DEFAULT_SITE_CONFIG}${NC}"
+    else
+      # 修改配置文件中的root指令
+      sed -i -r "s#root\s+[^;]+;#root /CLAY;#" "$DEFAULT_SITE_CONFIG" 2>/dev/null || {
+        echo -e "${YELLOW}无法修改root指令，尝试重新创建配置...${NC}"
+        cat > "$DEFAULT_SITE_CONFIG" <<EOF
+server {
+    listen 80;
+    server_name localhost;
+    
+    location / {
+        root /CLAY;
+        index index.html index.htm;
+    }
+}
+EOF
+      }
+    fi
 
     nginx -t
     if [[ $? -eq 0 ]]; then
@@ -387,6 +631,10 @@ EOF
       restart_nginx
     else
       echo -e "${RED}配置语法错误，根目录修改失败。${NC}"
+      if [[ -f "$backup_file" ]]; then
+        echo -e "${YELLOW}恢复备份文件...${NC}"
+        cp -f "$backup_file" "$DEFAULT_SITE_CONFIG"
+      fi
     fi
   else
     echo -e "${YELLOW}取消修改网站根目录。${NC}"
@@ -395,6 +643,12 @@ EOF
 
 configure_https() {
   echo -e "${YELLOW}配置 HTTPS...${NC}"
+  
+  # 检查是否已安装 Nginx
+  if ! command -v nginx &>/dev/null; then
+    handle_error "未检测到Nginx安装，请先安装Nginx" 0
+    return 1
+  fi
   
   # 检查是否已安装 SSL 证书
   if [[ -f "/etc/nginx/ssl/nginx.crt" && -f "/etc/nginx/ssl/nginx.key" ]]; then
@@ -409,17 +663,32 @@ configure_https() {
     generate_ssl_cert
   fi
   
+  # 检查配置文件是否存在
+  if [[ ! -f "$DEFAULT_SITE_CONFIG" ]]; then
+    echo -e "${YELLOW}Nginx配置文件 $DEFAULT_SITE_CONFIG 不存在，尝试查找或创建...${NC}"
+    find_nginx_config_file
+  fi
+  
   # 配置 Nginx 启用 HTTPS
   echo -e "${YELLOW}配置 Nginx 启用 HTTPS...${NC}"
   
   # 备份配置文件
   local backup_file="${DEFAULT_SITE_CONFIG}.bak.$(date +%Y%m%d%H%M%S)"
-  cp "$DEFAULT_SITE_CONFIG" "$backup_file" || handle_error "无法备份配置文件" 0
+  if ! cp "$DEFAULT_SITE_CONFIG" "$backup_file"; then
+    echo -e "${RED}无法备份配置文件 $DEFAULT_SITE_CONFIG${NC}"
+    echo -e "${YELLOW}尝试直接创建新的配置文件...${NC}"
+  else
+    echo -e "${GREEN}配置文件已备份为：${backup_file}${NC}"
+  fi
+  
+  # 确保目录存在
+  mkdir -p $(dirname "$DEFAULT_SITE_CONFIG")
   
   # 检查并修改 Nginx 配置以支持 HTTPS
   local server_name
-  server_name=$(grep -E "server_name" "$DEFAULT_SITE_CONFIG" | head -1 | awk '{print $2}' | tr -d ';')
-  server_name=${server_name:-_}
+  server_name=$(grep -E "server_name" "$DEFAULT_SITE_CONFIG" 2>/dev/null | head -1 | grep -o "server_name[[:space:]]*[^;]*" | sed 's/server_name[[:space:]]*//g' || echo "localhost")
+  
+  echo -e "${YELLOW}设置服务器名称为：${server_name}${NC}"
   
   cat > "$DEFAULT_SITE_CONFIG" <<EOF
 server {
@@ -463,19 +732,41 @@ server {
 }
 EOF
 
+  # 确保配置在主配置文件中被包含
+  if [[ "$DEFAULT_SITE_CONFIG" != "/etc/nginx/nginx.conf" && -f "/etc/nginx/nginx.conf" ]]; then
+    # 检查是否需要在主配置中添加include指令
+    if ! grep -q "include.*$DEFAULT_SITE_CONFIG" "/etc/nginx/nginx.conf"; then
+      # 查找http块结束位置
+      local http_end_line=$(grep -n "}" "/etc/nginx/nginx.conf" | grep -B1 "http" | head -1 | cut -d: -f1)
+      if [[ -n "$http_end_line" ]]; then
+        # 在http块结束前插入include指令
+        sed -i "${http_end_line}i\\    include $DEFAULT_SITE_CONFIG;" "/etc/nginx/nginx.conf"
+        echo -e "${GREEN}已将配置文件添加到主配置中${NC}"
+      fi
+    fi
+  fi
+
   nginx -t
   if [[ $? -eq 0 ]]; then
     echo -e "${GREEN}HTTPS 配置成功，正在重启 Nginx...${NC}"
     restart_nginx
     
-    echo -e "${GREEN}HTTPS 已启用！${NC}"
-    local port=$(grep -E "listen\s+[0-9]+" "$DEFAULT_SITE_CONFIG" | grep "ssl" | head -1 | grep -oP "\d+")
-    port=${port:-443}
-    echo -e "您现在可以通过 ${BLUE}https://$(hostname -I | awk '{print $1}'):${port}${NC} 访问网站。"
+    # 验证HTTPS是否实际启用
+    sleep 2
+    if ss -tuln | grep -q ":443 "; then
+      echo -e "${GREEN}HTTPS 已成功启用！${NC}"
+      echo -e "您现在可以通过 ${BLUE}https://$(hostname -I | awk '{print $1}')${NC} 访问网站。"
+    else
+      echo -e "${RED}警告：HTTPS 似乎未成功启用，无法检测到端口 443 监听${NC}"
+      echo -e "${YELLOW}请手动检查 Nginx 状态和错误日志${NC}"
+    fi
   else
-    echo -e "${RED}HTTPS 配置语法错误，配置失败。正在恢复备份文件...${NC}"
-    cp "$backup_file" "$DEFAULT_SITE_CONFIG"
-    echo -e "${YELLOW}已恢复到原始配置${NC}"
+    echo -e "${RED}HTTPS 配置语法错误，配置失败。${NC}"
+    if [[ -f "$backup_file" ]]; then
+      echo -e "${YELLOW}正在恢复备份文件...${NC}"
+      cp "$backup_file" "$DEFAULT_SITE_CONFIG"
+      echo -e "${YELLOW}已恢复到原始配置${NC}"
+    fi
   fi
 }
 
@@ -512,18 +803,76 @@ generate_ssl_cert() {
 configure_clay_video_access() {
   echo -e "${YELLOW}配置 Nginx 支持访问 /CLAY/1 目录的视频播放...${NC}"
 
-  cp "$DEFAULT_SITE_CONFIG" "${DEFAULT_SITE_CONFIG}.bak"
+  # 确保配置文件存在
+  if [[ ! -f "$DEFAULT_SITE_CONFIG" ]]; then
+    echo -e "${YELLOW}Nginx配置文件 $DEFAULT_SITE_CONFIG 不存在，尝试查找或创建...${NC}"
+    find_nginx_config_file
+  fi
 
-  sed -i '/location \/1\//,/\}/d' "$DEFAULT_SITE_CONFIG"
+  # 备份配置文件
+  local backup_file="${DEFAULT_SITE_CONFIG}.bak.$(date +%Y%m%d%H%M%S)"
+  if ! cp "$DEFAULT_SITE_CONFIG" "$backup_file"; then
+    echo -e "${RED}无法备份配置文件 $DEFAULT_SITE_CONFIG${NC}"
+    echo -e "${YELLOW}尝试直接创建新的配置文件...${NC}"
+  else
+    echo -e "${GREEN}配置文件已备份为：${backup_file}${NC}"
+  fi
 
-  sed -i "/server {/a \\
+  # 确保CLAY目录存在
+  mkdir -p /CLAY/1 2>/dev/null
+  
+  # 检查是否是主配置文件，如果是，需要特殊处理
+  if [[ "$DEFAULT_SITE_CONFIG" == "/etc/nginx/nginx.conf" ]]; then
+    # 创建额外的配置文件
+    local site_config="/etc/nginx/conf.d/clay-video.conf"
+    mkdir -p /etc/nginx/conf.d
+    
+    cat > "$site_config" <<EOF
+server {
+    listen 80;
+    server_name localhost;
+    
+    location / {
+        root /CLAY;
+        index index.html index.htm;
+    }
+    
+    location /1/ {
+        alias /CLAY/1/;
+        autoindex on;
+        mp4;
+        mp4_buffer_size 1m;
+        mp4_max_buffer_size 5m;
+    }
+}
+EOF
+    
+    # 确保主配置文件包含conf.d目录
+    if ! grep -q "include.*conf.d" "/etc/nginx/nginx.conf"; then
+      # 查找http块结束位置
+      local http_end_line=$(grep -n "}" "/etc/nginx/nginx.conf" | grep -B1 "http" | head -1 | cut -d: -f1)
+      if [[ -n "$http_end_line" ]]; then
+        # 在http块结束前插入include指令
+        sed -i "${http_end_line}i\\    include /etc/nginx/conf.d/*.conf;" "/etc/nginx/nginx.conf"
+        echo -e "${GREEN}已将conf.d目录添加到主配置中${NC}"
+      fi
+    fi
+    
+    echo -e "${GREEN}已创建视频访问配置文件：${site_config}${NC}"
+  else
+    # 移除已有的视频配置（如果存在）
+    sed -i '/location \/1\//,/\}/d' "$DEFAULT_SITE_CONFIG" 2>/dev/null
+
+    # 添加新的视频配置
+    sed -i "/server {/a \\
     location /1/ {\\
         alias /CLAY/1/;\\
         autoindex on;\\
         mp4;\\
         mp4_buffer_size 1m;\\
         mp4_max_buffer_size 5m;\\
-    }" "$DEFAULT_SITE_CONFIG"
+    }" "$DEFAULT_SITE_CONFIG" 2>/dev/null
+  fi
 
   if [[ -d /CLAY ]]; then
     cat > /CLAY/index.html <<EOF
@@ -540,8 +889,9 @@ configure_clay_video_access() {
 </body>
 </html>
 EOF
-    chown www-data:www-data /CLAY/index.html
     chmod 644 /CLAY/index.html
+    # 尝试设置正确的所有者，但如果失败也不影响
+    chown www-data:www-data /CLAY/index.html 2>/dev/null || true
   else
     echo -e "${YELLOW}目录 /CLAY 不存在，示例首页未创建，请自行创建。${NC}"
   fi
@@ -549,15 +899,23 @@ EOF
   nginx -t
   if [[ $? -eq 0 ]]; then
     echo -e "${GREEN}配置语法正确，重启 Nginx...${NC}"
-    systemctl restart nginx
+    restart_nginx
   else
     echo -e "${RED}配置语法错误，恢复备份文件。${NC}"
-    mv -f "${DEFAULT_SITE_CONFIG}.bak" "$DEFAULT_SITE_CONFIG"
+    if [[ -f "$backup_file" ]]; then
+      cp -f "$backup_file" "$DEFAULT_SITE_CONFIG"
+    fi
   fi
 }
 
 check_nginx_status() {
   echo -e "${YELLOW}检查 Nginx 状态...${NC}"
+  
+  # 检查 Nginx 是否已安装
+  if ! command -v nginx &>/dev/null; then
+    echo -e "${RED}Nginx 未安装${NC}"
+    return 1
+  fi
   
   # 检查进程
   if pgrep nginx &>/dev/null; then
@@ -574,25 +932,56 @@ check_nginx_status() {
   # 检查配置
   nginx -t
   
-  # 检查端口
-  local port=$(grep -E "listen\s+[0-9]+" "$DEFAULT_SITE_CONFIG" | grep -oP "listen\s+\K[0-9]+" | head -1)
-  port=${port:-80}
+  # 确保配置文件存在
+  if [[ ! -f "$DEFAULT_SITE_CONFIG" ]]; then
+    echo -e "${YELLOW}Nginx配置文件 $DEFAULT_SITE_CONFIG 不存在，尝试查找...${NC}"
+    find_nginx_config_file
+  fi
   
-  if ss -tuln | grep -q ":$port "; then
-    echo -e "${GREEN}Nginx 正在监听端口 $port${NC}"
+  # 检查端口
+  echo -e "${YELLOW}Nginx 监听的端口:${NC}"
+  local nginx_ports=$(ss -tuln | grep LISTEN | grep -E '(nginx|:80|:443)' | awk '{print $5}' | cut -d: -f2 | sort -u)
+  
+  if [[ -z "$nginx_ports" ]]; then
+    echo -e "${RED}未找到 Nginx 监听的端口${NC}"
   else
-    echo -e "${RED}警告：Nginx 未在端口 $port 上监听${NC}"
+    for port in $nginx_ports; do
+      echo -e "  ${GREEN}端口 $port${NC}"
+    done
+  fi
+  
+  # 检查是否启用了 HTTPS
+  if ss -tuln | grep -q ":443 "; then
+    echo -e "${GREEN}HTTPS 已启用 (端口 443)${NC}"
+    
+    # 检查SSL证书
+    if [[ -f "/etc/nginx/ssl/nginx.crt" ]]; then
+      echo -e "${GREEN}SSL证书信息:${NC}"
+      openssl x509 -noout -subject -dates -in /etc/nginx/ssl/nginx.crt 2>/dev/null || echo -e "${RED}无法读取SSL证书信息${NC}"
+    else
+      echo -e "${YELLOW}未找到SSL证书文件${NC}"
+    fi
+  else
+    echo -e "${YELLOW}HTTPS 未启用${NC}"
   fi
   
   # 检查已加载模块
-  echo -e "${YELLOW}已加载模块：${NC}"
+  echo -e "\n${YELLOW}已加载模块：${NC}"
   nginx -V 2>&1 | grep -o -- '--with-[a-zA-Z0-9_]*_module' | sort
   
   # 显示systemd状态
   if command -v systemctl &>/dev/null; then
     echo -e "\n${YELLOW}Systemd 服务状态：${NC}"
     systemctl status nginx | head -10
+  elif command -v service &>/dev/null; then
+    echo -e "\n${YELLOW}服务状态：${NC}"
+    service nginx status
   fi
+  
+  # 检查配置文件路径
+  echo -e "\n${YELLOW}Nginx 配置文件位置：${NC}"
+  echo -e "主配置文件: $(nginx -V 2>&1 | grep -o 'conf-path=[^ ]*' | cut -d= -f2)"
+  echo -e "网站配置文件: $DEFAULT_SITE_CONFIG"
   
   # 反馈PHP-FPM状态
   if pgrep php-fpm &>/dev/null; then
@@ -689,8 +1078,32 @@ parse_arguments() {
 
 change_port_direct() {
   local new_port="$1"
-  local current_port
-  current_port=$(grep -E "listen\s+[0-9]+" "$DEFAULT_SITE_CONFIG" | grep -oP "listen\s+\K[0-9]+" | head -1)
+  local current_port=""
+  
+  # 确保配置文件存在
+  if [[ ! -f "$DEFAULT_SITE_CONFIG" ]]; then
+    echo -e "${YELLOW}Nginx配置文件 $DEFAULT_SITE_CONFIG 不存在，尝试查找或创建...${NC}"
+    find_nginx_config_file
+  fi
+  
+  # 获取当前端口
+  current_port=$(grep -E "listen\s+[0-9]+" "$DEFAULT_SITE_CONFIG" 2>/dev/null | grep -oP "listen\s+\K[0-9]+" | head -1)
+  
+  # 如果找不到端口配置，检查是否有其他配置文件包含端口信息
+  if [[ -z "$current_port" ]]; then
+    for conf_file in /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/* /etc/nginx/sites-available/*; do
+      if [[ -f "$conf_file" ]]; then
+        local found_port=$(grep -E "listen\s+[0-9]+" "$conf_file" 2>/dev/null | grep -oP "listen\s+\K[0-9]+" | head -1)
+        if [[ -n "$found_port" ]]; then
+          current_port=$found_port
+          DEFAULT_SITE_CONFIG=$conf_file
+          echo -e "${YELLOW}在 $conf_file 中找到监听端口 $current_port${NC}"
+          break
+        fi
+      fi
+    done
+  fi
+  
   current_port=${current_port:-80}
   
   if [[ "$new_port" == "$current_port" ]]; then
@@ -702,14 +1115,58 @@ change_port_direct() {
   
   # 备份配置文件
   local backup_file="${DEFAULT_SITE_CONFIG}.bak.$(date +%Y%m%d%H%M%S)"
-  cp "$DEFAULT_SITE_CONFIG" "$backup_file" || handle_error "无法备份配置文件" 0
+  if ! cp "$DEFAULT_SITE_CONFIG" "$backup_file" 2>/dev/null; then
+    echo -e "${RED}无法备份配置文件 $DEFAULT_SITE_CONFIG${NC}"
+    echo -e "${YELLOW}尝试直接修改...${NC}"
+  else
+    echo -e "${GREEN}配置文件已备份为：${backup_file}${NC}"
+  fi
   
-  # 修改端口
-  sed -i -r "s/listen\s+[0-9]+;/listen $new_port;/" "$DEFAULT_SITE_CONFIG"
-  
-  # 检查 IPv6 地址设置并更新
-  if grep -q "listen \[\:\:\]" "$DEFAULT_SITE_CONFIG"; then
-    sed -i -r "s/listen\s+\[\:\:\]\:[0-9]+;/listen [::]:$new_port;/" "$DEFAULT_SITE_CONFIG"
+  # 如果是主配置文件，需要特殊处理
+  if [[ "$DEFAULT_SITE_CONFIG" == "/etc/nginx/nginx.conf" ]]; then
+    # 创建或修改默认站点配置
+    local site_config="/etc/nginx/conf.d/default.conf"
+    mkdir -p /etc/nginx/conf.d
+    
+    if [[ -f "$site_config" ]]; then
+      # 修改现有站点配置
+      sed -i -r "s/listen\s+[0-9]+;/listen $new_port;/" "$site_config" 2>/dev/null
+      
+      # 检查 IPv6 地址设置并更新
+      if grep -q "listen \[\:\:\]" "$site_config" 2>/dev/null; then
+        sed -i -r "s/listen\s+\[\:\:\]\:[0-9]+;/listen [::]:$new_port;/" "$site_config" 2>/dev/null
+      fi
+    else
+      # 创建新的站点配置
+      cat > "$site_config" <<EOF
+server {
+    listen $new_port;
+    server_name localhost;
+    
+    location / {
+        root /usr/share/nginx/html;
+        index index.html index.htm;
+    }
+}
+EOF
+      # 确保主配置文件包含conf.d目录
+      if ! grep -q "include.*conf.d" "/etc/nginx/nginx.conf" 2>/dev/null; then
+        local http_end_line=$(grep -n "}" "/etc/nginx/nginx.conf" 2>/dev/null | grep -B1 "http" | head -1 | cut -d: -f1)
+        if [[ -n "$http_end_line" ]]; then
+          sed -i "${http_end_line}i\\    include /etc/nginx/conf.d/*.conf;" "/etc/nginx/nginx.conf" 2>/dev/null
+          echo -e "${GREEN}已将conf.d目录添加到主配置中${NC}"
+        fi
+      fi
+    fi
+    DEFAULT_SITE_CONFIG="$site_config"
+  else
+    # 修改端口
+    sed -i -r "s/listen\s+[0-9]+;/listen $new_port;/" "$DEFAULT_SITE_CONFIG" 2>/dev/null
+    
+    # 检查 IPv6 地址设置并更新
+    if grep -q "listen \[\:\:\]" "$DEFAULT_SITE_CONFIG" 2>/dev/null; then
+      sed -i -r "s/listen\s+\[\:\:\]\:[0-9]+;/listen [::]:$new_port;/" "$DEFAULT_SITE_CONFIG" 2>/dev/null
+    fi
   fi
 
   nginx -t
@@ -717,11 +1174,32 @@ change_port_direct() {
     echo -e "${GREEN}端口修改成功，正在重启 Nginx...${NC}"
     restart_nginx
   else
-    echo -e "${RED}Nginx 配置语法错误，端口修改失败。正在恢复备份文件...${NC}"
-    cp "$backup_file" "$DEFAULT_SITE_CONFIG"
-    echo -e "${YELLOW}已恢复到原始配置${NC}"
+    echo -e "${RED}Nginx 配置语法错误，端口修改失败。${NC}"
+    if [[ -f "$backup_file" ]]; then
+      echo -e "${YELLOW}正在恢复备份文件...${NC}"
+      cp -f "$backup_file" "$DEFAULT_SITE_CONFIG"
+      echo -e "${YELLOW}已恢复到原始配置${NC}"
+    fi
     return 1
   fi
+}
+
+# 在主函数中添加一个版本和环境信息展示
+show_environment() {
+  echo -e "\n${BLUE}系统环境信息:${NC}"
+  echo -e "操作系统: $(cat /etc/os-release 2>/dev/null | grep PRETTY_NAME | cut -d= -f2 | tr -d '"')"
+  echo -e "内核版本: $(uname -r)"
+  echo -e "CPU架构: $(uname -m)"
+  echo -e "可用内存: $(free -h | grep Mem | awk '{print $4}')"
+  echo -e "可用磁盘空间: $(df -h / | grep / | awk '{print $4}')"
+  
+  if command -v nginx &>/dev/null; then
+    echo -e "Nginx版本: $(nginx -v 2>&1)"
+  else
+    echo -e "Nginx: ${RED}未安装${NC}"
+  fi
+  
+  echo -e "${YELLOW}脚本版本: v${SCRIPT_VERSION}${NC}"
 }
 
 main_menu() {
@@ -749,6 +1227,7 @@ main() {
   
   # 如果没有命令行参数，显示交互菜单
   detect_os
+  show_environment
   
   while true; do
     main_menu
