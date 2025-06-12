@@ -650,6 +650,16 @@ configure_https() {
     return 1
   fi
   
+  # 检查Nginx是否支持SSL模块
+  if ! nginx -V 2>&1 | grep -q "with-http_ssl_module"; then
+    echo -e "${RED}警告：当前Nginx可能未编译SSL模块支持${NC}"
+    read -p "是否继续配置HTTPS？(yes/no): " continue_ssl
+    if [[ ! "$continue_ssl" =~ ^(yes|y)$ ]]; then
+      echo -e "${YELLOW}HTTPS配置已取消${NC}"
+      return 0
+    fi
+  fi
+  
   # 检查是否已安装 SSL 证书
   if [[ -f "/etc/nginx/ssl/nginx.crt" && -f "/etc/nginx/ssl/nginx.key" ]]; then
     echo -e "${YELLOW}检测到已存在的 SSL 证书${NC}"
@@ -657,10 +667,31 @@ configure_https() {
     if [[ ! "$regen_cert" =~ ^(yes|y)$ ]]; then
       echo -e "${GREEN}保留现有证书${NC}"
     else
-      generate_ssl_cert
+      generate_ssl_cert || {
+        echo -e "${RED}SSL证书生成失败，无法配置HTTPS${NC}"
+        return 1
+      }
     fi
   else
-    generate_ssl_cert
+    generate_ssl_cert || {
+      echo -e "${RED}SSL证书生成失败，无法配置HTTPS${NC}"
+      return 1
+    }
+  fi
+  
+  # 确保证书权限正确且Nginx可以读取
+  if [[ -f "/etc/nginx/ssl/nginx.key" ]]; then
+    # 获取Nginx用户
+    local nginx_user=$(grep -E "^user" /etc/nginx/nginx.conf 2>/dev/null | awk '{print $2}' | sed 's/;$//')
+    nginx_user=${nginx_user:-"www-data"}
+    
+    echo -e "${YELLOW}设置证书权限，确保Nginx用户($nginx_user)可访问...${NC}"
+    chmod 600 /etc/nginx/ssl/nginx.key
+    chmod 644 /etc/nginx/ssl/nginx.crt
+    
+    # 尝试设置所有者，但不强制要求成功
+    chown $nginx_user:$nginx_user /etc/nginx/ssl/nginx.key 2>/dev/null || true
+    chown $nginx_user:$nginx_user /etc/nginx/ssl/nginx.crt 2>/dev/null || true
   fi
   
   # 检查配置文件是否存在
@@ -669,14 +700,10 @@ configure_https() {
     find_nginx_config_file
   fi
   
-  # 配置 Nginx 启用 HTTPS
-  echo -e "${YELLOW}配置 Nginx 启用 HTTPS...${NC}"
-  
   # 备份配置文件
   local backup_file="${DEFAULT_SITE_CONFIG}.bak.$(date +%Y%m%d%H%M%S)"
-  if ! cp "$DEFAULT_SITE_CONFIG" "$backup_file"; then
-    echo -e "${RED}无法备份配置文件 $DEFAULT_SITE_CONFIG${NC}"
-    echo -e "${YELLOW}尝试直接创建新的配置文件...${NC}"
+  if ! cp "$DEFAULT_SITE_CONFIG" "$backup_file" 2>/dev/null; then
+    echo -e "${YELLOW}无法备份配置文件 $DEFAULT_SITE_CONFIG，尝试直接创建新配置...${NC}"
   else
     echo -e "${GREEN}配置文件已备份为：${backup_file}${NC}"
   fi
@@ -687,10 +714,22 @@ configure_https() {
   # 检查并修改 Nginx 配置以支持 HTTPS
   local server_name
   server_name=$(grep -E "server_name" "$DEFAULT_SITE_CONFIG" 2>/dev/null | head -1 | grep -o "server_name[[:space:]]*[^;]*" | sed 's/server_name[[:space:]]*//g' || echo "localhost")
+  server_name=${server_name// /} # 移除多余空格
+  [[ -z "$server_name" ]] && server_name="localhost" # 确保有默认值
   
   echo -e "${YELLOW}设置服务器名称为：${server_name}${NC}"
   
-  cat > "$DEFAULT_SITE_CONFIG" <<EOF
+  # 创建HTTPS配置文件
+  local https_config_path="$DEFAULT_SITE_CONFIG"
+  
+  # 如果是主配置文件，使用特殊处理
+  if [[ "$DEFAULT_SITE_CONFIG" == "/etc/nginx/nginx.conf" ]]; then
+    https_config_path="/etc/nginx/conf.d/https.conf"
+    mkdir -p /etc/nginx/conf.d
+  fi
+  
+  cat > "$https_config_path" <<EOF
+# HTTP配置 - 重定向到HTTPS
 server {
     listen 80;
     server_name $server_name;
@@ -701,6 +740,7 @@ server {
     }
 }
 
+# HTTPS配置
 server {
     listen 443 ssl;
     server_name $server_name;
@@ -710,12 +750,14 @@ server {
     
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers on;
-    ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-SHA384;
+    ssl_ciphers 'ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256';
     ssl_session_cache shared:SSL:10m;
     ssl_session_timeout 10m;
     
     # 安全头配置
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options nosniff;
+    add_header X-Frame-Options SAMEORIGIN;
     
     location / {
         root /CLAY;
@@ -733,19 +775,58 @@ server {
 EOF
 
   # 确保配置在主配置文件中被包含
-  if [[ "$DEFAULT_SITE_CONFIG" != "/etc/nginx/nginx.conf" && -f "/etc/nginx/nginx.conf" ]]; then
-    # 检查是否需要在主配置中添加include指令
-    if ! grep -q "include.*$DEFAULT_SITE_CONFIG" "/etc/nginx/nginx.conf"; then
-      # 查找http块结束位置
-      local http_end_line=$(grep -n "}" "/etc/nginx/nginx.conf" | grep -B1 "http" | head -1 | cut -d: -f1)
-      if [[ -n "$http_end_line" ]]; then
-        # 在http块结束前插入include指令
-        sed -i "${http_end_line}i\\    include $DEFAULT_SITE_CONFIG;" "/etc/nginx/nginx.conf"
-        echo -e "${GREEN}已将配置文件添加到主配置中${NC}"
+  if [[ "$https_config_path" != "/etc/nginx/nginx.conf" && "$https_config_path" != "$DEFAULT_SITE_CONFIG" ]]; then
+    local main_conf="/etc/nginx/nginx.conf"
+    
+    # 如果主配置文件存在
+    if [[ -f "$main_conf" ]]; then
+      echo -e "${YELLOW}更新主配置文件，确保包含HTTPS配置...${NC}"
+      
+      # 检查是否已包含该配置
+      if ! grep -q "include.*$https_config_path" "$main_conf" 2>/dev/null; then
+        # 检查是否包含conf.d目录
+        if ! grep -q "include.*conf.d" "$main_conf" 2>/dev/null; then
+          # 尝试在http块结束前添加include指令
+          local http_end_line
+          http_end_line=$(grep -n "}" "$main_conf" | grep -B1 "http" | head -1 | cut -d: -f1)
+          
+          if [[ -n "$http_end_line" ]]; then
+            # 在http块结束前插入include指令
+            sed -i "${http_end_line}i\\    include /etc/nginx/conf.d/*.conf;" "$main_conf"
+            echo -e "${GREEN}已将conf.d目录添加到主配置中${NC}"
+          else
+            # 如果找不到http块，尝试在文件末尾添加
+            echo -e "\nhttp {\n    include /etc/nginx/conf.d/*.conf;\n}" >> "$main_conf"
+            echo -e "${YELLOW}无法找到http块，已在文件末尾添加配置${NC}"
+          fi
+        fi
       fi
     fi
   fi
+  
+  # 创建示例SSL首页
+  if [[ -d /CLAY ]]; then
+    mkdir -p /CLAY/1 2>/dev/null
+    
+    if [[ ! -f /CLAY/index.html ]]; then
+      cat > /CLAY/index.html <<EOF
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>HTTPS已启用</title>
+<style>body{font-family:Arial,sans-serif;text-align:center;margin-top:50px;}</style>
+</head>
+<body>
+<h1>HTTPS已成功配置</h1>
+<p>恭喜，您的Nginx服务器已成功配置HTTPS！</p>
+</body>
+</html>
+EOF
+      chmod 644 /CLAY/index.html
+    fi
+  fi
 
+  # 测试配置
+  echo -e "${YELLOW}测试 Nginx 配置...${NC}"
   nginx -t
   if [[ $? -eq 0 ]]; then
     echo -e "${GREEN}HTTPS 配置成功，正在重启 Nginx...${NC}"
@@ -754,11 +835,18 @@ EOF
     # 验证HTTPS是否实际启用
     sleep 2
     if ss -tuln | grep -q ":443 "; then
+      # 获取服务器IP地址
+      local server_ip
+      server_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || ip addr show 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1 || echo "127.0.0.1")
+      
       echo -e "${GREEN}HTTPS 已成功启用！${NC}"
-      echo -e "您现在可以通过 ${BLUE}https://$(hostname -I | awk '{print $1}')${NC} 访问网站。"
+      echo -e "您现在可以通过 ${BLUE}https://$server_ip${NC} 或 ${BLUE}https://$server_name${NC} 访问网站。"
     else
       echo -e "${RED}警告：HTTPS 似乎未成功启用，无法检测到端口 443 监听${NC}"
-      echo -e "${YELLOW}请手动检查 Nginx 状态和错误日志${NC}"
+      echo -e "${YELLOW}请检查：${NC}"
+      echo -e "1. 端口443是否被其他程序占用"
+      echo -e "2. 防火墙是否阻止了443端口"
+      echo -e "3. 查看日志: ${BLUE}tail /var/log/nginx/error.log${NC}"
     fi
   else
     echo -e "${RED}HTTPS 配置语法错误，配置失败。${NC}"
@@ -767,6 +855,10 @@ EOF
       cp "$backup_file" "$DEFAULT_SITE_CONFIG"
       echo -e "${YELLOW}已恢复到原始配置${NC}"
     fi
+    
+    # 输出具体的错误信息帮助诊断
+    echo -e "${RED}配置错误详细信息:${NC}"
+    nginx -t
   fi
 }
 
@@ -787,17 +879,86 @@ generate_ssl_cert() {
   # 创建目录存储证书
   mkdir -p /etc/nginx/ssl
   
-  # 生成私钥和证书
+  # 检查OpenSSL版本
+  local openssl_version=$(openssl version | grep -oP '(?<=OpenSSL )[0-9.]+' || echo "0.0.0")
+  local major_version=$(echo "$openssl_version" | cut -d. -f1)
+  local minor_version=$(echo "$openssl_version" | cut -d. -f2)
+  
+  echo -e "${YELLOW}检测到 OpenSSL 版本: $openssl_version${NC}"
+  
+  # 获取主机名和IP地址（提高兼容性）
+  local hostname_str=$(hostname 2>/dev/null || echo "localhost")
+  local ip_address=$(hostname -I 2>/dev/null | awk '{print $1}' || ip addr show 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1 || echo "127.0.0.1")
+  
+  if [[ "$major_version" -ge 1 && "$minor_version" -ge 1 ]]; then
+    # OpenSSL 1.1.0及以上版本支持-addext参数
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+      -keyout /etc/nginx/ssl/nginx.key \
+      -out /etc/nginx/ssl/nginx.crt \
+      -subj "/CN=$hostname_str/O=Nginx HTTPS/C=CN" \
+      -addext "subjectAltName = DNS:$hostname_str,IP:$ip_address" || {
+        echo -e "${RED}生成SSL证书失败，尝试使用兼容模式${NC}"
+        # 回退到旧版本兼容模式
+        generate_ssl_cert_legacy "$hostname_str" "$ip_address"
+        return
+      }
+  else
+    # 对于旧版本OpenSSL，使用兼容方式
+    generate_ssl_cert_legacy "$hostname_str" "$ip_address"
+  fi
+  
+  # 设置适当权限
+  chmod 600 /etc/nginx/ssl/nginx.key
+  chmod 644 /etc/nginx/ssl/nginx.crt
+  
+  # 验证证书是否正确生成
+  if [[ ! -f /etc/nginx/ssl/nginx.crt || ! -f /etc/nginx/ssl/nginx.key ]]; then
+    echo -e "${RED}SSL证书文件未正确生成${NC}"
+    return 1
+  fi
+  
+  echo -e "${GREEN}SSL 证书生成完成${NC}"
+}
+
+# 为旧版OpenSSL添加兼容模式函数
+generate_ssl_cert_legacy() {
+  local hostname_str="$1"
+  local ip_address="$2"
+  
+  echo -e "${YELLOW}使用兼容模式为旧版OpenSSL生成证书...${NC}"
+  
+  # 创建配置文件
+  local ssl_conf="/tmp/openssl-san.cnf"
+  cat > "$ssl_conf" << EOF
+[req]
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+CN = $hostname_str
+O = Nginx HTTPS
+C = CN
+
+[v3_req]
+keyUsage = keyEncipherment, dataEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = $hostname_str
+IP.1 = $ip_address
+EOF
+
+  # 使用配置文件生成证书
   openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
     -keyout /etc/nginx/ssl/nginx.key \
     -out /etc/nginx/ssl/nginx.crt \
-    -subj "/CN=$(hostname)/O=Nginx HTTPS/C=CN" \
-    -addext "subjectAltName = DNS:$(hostname),IP:$(hostname -I | awk '{print $1}')"
+    -config "$ssl_conf"
   
-  chmod 400 /etc/nginx/ssl/nginx.key
-  chmod 444 /etc/nginx/ssl/nginx.crt
-  
-  echo -e "${GREEN}SSL 证书生成完成${NC}"
+  # 清理临时文件
+  rm -f "$ssl_conf"
+  return $?
 }
 
 configure_clay_video_access() {
