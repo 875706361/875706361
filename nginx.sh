@@ -1,5 +1,5 @@
 #!/bin/bash
-# Nginx全自动管理脚本 v6.0 - 支持全Linux发行版、防火墙自动卸载、视频播放优化
+# Nginx全自动管理脚本 v7.0 - 支持全Linux发行版、防火墙自动卸载、视频播放优化
 
 # 颜色定义
 RED='\033[0;31m'
@@ -252,18 +252,38 @@ secure_nginx_config() {
 # 视频播放优化配置
 configure_video_support() {
     local nginx_conf="/etc/nginx/nginx.conf"
+    local conf_dir="/etc/nginx/conf.d"
+    [ -d "/etc/nginx/sites-available" ] && conf_dir="/etc/nginx/sites-available"
     
     echo -e "${BLUE}配置视频播放支持...${NC}"
     
-    # 添加MP4模块配置
-    if ! grep -q "mp4;" "$nginx_conf"; then
-        sed -i '/http {/a \    mp4;\n    mp4_buffer_size 5m;\n    mp4_max_buffer_size 10m;' "$nginx_conf"
+    # 添加缓冲区配置到http块
+    if ! grep -q "mp4_buffer_size" "$nginx_conf"; then
+        sed -i '/http {/a \    mp4_buffer_size 5m;\n    mp4_max_buffer_size 10m;' "$nginx_conf"
     fi
     
     # 确保视频MIME类型
     if ! grep -q "video/mp4" "/etc/nginx/mime.types"; then
         sed -i '/types {/a \        video/mp4                     mp4;\n        video/webm                    webm;\n        video/ogg                     ogv;' "/etc/nginx/mime.types"
     fi
+    
+    # 在每个站点配置文件添加mp4 location块
+    for conf in "$conf_dir"/*.conf; do
+        if [ -f "$conf" ] && ! grep -q "location ~* \\.mp4" "$conf"; then
+            cat >> "$conf" <<EOF
+
+# 视频文件处理
+location ~* \.(mp4|webm|ogv|flv|mov|avi)$ {
+    mp4;
+    gzip off;
+    add_header Accept-Ranges bytes;
+    add_header Cache-Control "public, max-age=31536000";
+    access_log off;
+}
+EOF
+            echo -e "${GREEN}已在配置文件 $conf 添加mp4视频播放支持${NC}"
+        fi
+    done
     
     echo -e "${GREEN}视频播放配置已添加${NC}"
 }
@@ -567,8 +587,6 @@ server {
     # 视频文件处理
     location ~* \.(mp4|webm|ogv|flv|mov|avi)$ {
         mp4;
-        mp4_buffer_size 5m;
-        mp4_max_buffer_size 10m;
         gzip off;
         add_header Accept-Ranges bytes;
         add_header Cache-Control "public, max-age=31536000";
@@ -841,7 +859,7 @@ restart_nginx() {
 main_menu() {
     clear
     echo -e "${GREEN}===================================${NC}"
-    echo -e "${GREEN}=== Nginx安全管理脚本 v6.0 ===${NC}"
+    echo -e "${GREEN}=== Nginx安全管理脚本 v7.0 ===${NC}"
     echo -e "${GREEN}===================================${NC}"
     echo -e "${BLUE}1. 安装Nginx${NC}"
     echo -e "${BLUE}2. 卸载Nginx${NC}"
