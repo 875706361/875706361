@@ -1,5 +1,5 @@
 #!/bin/bash
-# Nginx全自动管理脚本 v3.0 - 支持全Linux发行版和HTTPS智能配置
+# Nginx全自动管理脚本 v4.0 - 支持全Linux发行版，自动卸载防火墙，显示网站目录信息
 
 # 颜色定义
 RED='\033[0;31m'
@@ -90,6 +90,68 @@ detect_pkg_manager() {
             ;;
     esac
     echo -e "${BLUE}使用包管理器: $PKG_MANAGER${NC}"
+}
+
+# 自动检测并卸载防火墙
+detect_remove_firewall() {
+    echo -e "${BLUE}检测并卸载防火墙...${NC}"
+    
+    local fw_removed=0
+    
+    # 检测常见防火墙软件
+    if command -v ufw >/dev/null 2>&1; then
+        echo -e "${YELLOW}检测到UFW防火墙，正在卸载...${NC}"
+        ufw disable
+        $REMOVE_CMD ufw
+        fw_removed=1
+    fi
+    
+    if command -v firewall-cmd >/dev/null 2>&1 || systemctl list-unit-files | grep -q firewalld; then
+        echo -e "${YELLOW}检测到firewalld防火墙，正在卸载...${NC}"
+        systemctl stop firewalld
+        systemctl disable firewalld
+        $REMOVE_CMD firewalld
+        fw_removed=1
+    fi
+    
+    # 检测iptables服务
+    if systemctl list-unit-files | grep -q iptables; then
+        echo -e "${YELLOW}检测到iptables服务，正在禁用...${NC}"
+        systemctl stop iptables
+        systemctl disable iptables
+        if [ "$PKG_MANAGER" = "yum" ] || [ "$PKG_MANAGER" = "dnf" ]; then
+            $REMOVE_CMD iptables-services
+        fi
+        fw_removed=1
+    fi
+    
+    # 检测nftables
+    if command -v nft >/dev/null 2>&1 || systemctl list-unit-files | grep -q nftables; then
+        echo -e "${YELLOW}检测到nftables防火墙，正在卸载...${NC}"
+        systemctl stop nftables
+        systemctl disable nftables
+        $REMOVE_CMD nftables
+        fw_removed=1
+    fi
+    
+    if [ $fw_removed -eq 1 ]; then
+        echo -e "${GREEN}已卸载所有检测到的防火墙软件${NC}"
+    else
+        echo -e "${GREEN}未检测到防火墙软件${NC}"
+    fi
+    
+    # 清除所有iptables规则
+    if command -v iptables >/dev/null 2>&1; then
+        echo -e "${BLUE}清除所有iptables规则...${NC}"
+        iptables -P INPUT ACCEPT
+        iptables -P FORWARD ACCEPT
+        iptables -P OUTPUT ACCEPT
+        iptables -t nat -F
+        iptables -t mangle -F
+        iptables -F
+        iptables -X
+        echo -e "${GREEN}已清除所有iptables规则${NC}"
+    fi
 }
 
 # 证书路径自动配置
@@ -237,48 +299,6 @@ EOF
     echo -e "${GREEN}已生成安全默认页面: $index_path${NC}"
 }
 
-# 防火墙配置
-configure_firewall() {
-    echo -e "${BLUE}配置防火墙规则...${NC}"
-    
-    local fw_configured=0
-    
-    # 检测防火墙类型
-    if command -v ufw >/dev/null 2>&1; then
-        echo -e "${BLUE}检测到UFW防火墙${NC}"
-        ufw allow 80/tcp
-        ufw allow 443/tcp
-        # 如果UFW未启用则不重新加载
-        ufw status | grep -q "Status: active" && ufw reload
-        fw_configured=1
-    elif command -v firewall-cmd >/dev/null 2>&1; then
-        echo -e "${BLUE}检测到firewalld防火墙${NC}"
-        firewall-cmd --zone=public --add-service=http --permanent
-        firewall-cmd --zone=public --add-service=https --permanent
-        firewall-cmd --reload
-        fw_configured=1
-    elif command -v iptables >/dev/null 2>&1; then
-        echo -e "${BLUE}配置iptables规则${NC}"
-        iptables -I INPUT -p tcp --dport 80 -j ACCEPT
-        iptables -I INPUT -p tcp --dport 443 -j ACCEPT
-        # 保存iptables规则
-        if command -v iptables-save >/dev/null 2>&1; then
-            if [ -d /etc/iptables ]; then
-                iptables-save > /etc/iptables/rules.v4
-            elif [ -d /etc/sysconfig ]; then
-                iptables-save > /etc/sysconfig/iptables
-            fi
-        fi
-        fw_configured=1
-    fi
-    
-    if [ $fw_configured -eq 1 ]; then
-        echo -e "${GREEN}防火墙规则已配置, 开放端口: 80, 443${NC}"
-    else
-        echo -e "${YELLOW}未检测到支持的防火墙系统, 请手动配置防火墙规则${NC}"
-    fi
-}
-
 # Nginx安装函数
 install_nginx() {
     echo -e "${GREEN}开始安装Nginx...${NC}"
@@ -292,6 +312,9 @@ install_nginx() {
             return
         fi
     fi
+    
+    # 检测并卸载防火墙
+    detect_remove_firewall
     
     # 根据不同系统安装Nginx
     case $PKG_MANAGER in
@@ -354,9 +377,6 @@ install_nginx() {
     # 生成安全默认页面
     generate_safe_index "/usr/share/nginx/html/index.html"
     generate_safe_index "/var/www/html/index.html"
-    
-    # 配置防火墙
-    configure_firewall
     
     echo -e "${GREEN}Nginx安装完成并应用安全配置${NC}"
     echo -e "${BLUE}Nginx版本: $(nginx -v 2>&1 | cut -d/ -f2)${NC}"
@@ -541,6 +561,94 @@ EOF
     fi
 }
 
+# 查找所有网站目录
+find_website_roots() {
+    echo -e "${BLUE}正在查找所有网站目录...${NC}"
+    
+    local roots=()
+    
+    # 检查常见网站目录
+    local common_dirs=("/var/www" "/usr/share/nginx/html" "/srv/www" "/var/www/html")
+    for dir in "${common_dirs[@]}"; do
+        if [ -d "$dir" ]; then
+            roots+=("$dir")
+        fi
+    done
+    
+    # 从Nginx配置中查找root指令
+    if command -v nginx >/dev/null 2>&1; then
+        local config_roots=$(grep -r "root" /etc/nginx/ 2>/dev/null | grep -v "#" | sed -e 's/.*root\s\+\([^;]\+\);.*/\1/' | sort | uniq)
+        if [ -n "$config_roots" ]; then
+            while IFS= read -r line; do
+                roots+=("$line")
+            done <<< "$config_roots"
+        fi
+    fi
+    
+    # 从sites-enabled中查找
+    if [ -d "/etc/nginx/sites-enabled" ]; then
+        local enabled_sites=$(find /etc/nginx/sites-enabled -type f -o -type l)
+        for site in $enabled_sites; do
+            local site_root=$(grep "root" "$site" | grep -v "#" | head -1 | sed -e 's/.*root\s\+\([^;]\+\);.*/\1/')
+            if [ -n "$site_root" ]; then
+                roots+=("$site_root")
+            fi
+        done
+    fi
+    
+    # 从conf.d中查找
+    if [ -d "/etc/nginx/conf.d" ]; then
+        local conf_sites=$(find /etc/nginx/conf.d -name "*.conf" -type f)
+        for site in $conf_sites; do
+            local site_root=$(grep "root" "$site" | grep -v "#" | head -1 | sed -e 's/.*root\s\+\([^;]\+\);.*/\1/')
+            if [ -n "$site_root" ]; then
+                roots+=("$site_root")
+            fi
+        done
+    fi
+    
+    # 去重并排序
+    local unique_roots=$(printf '%s\n' "${roots[@]}" | sort | uniq)
+    
+    echo "$unique_roots"
+}
+
+# 获取网站域名和目录映射
+get_website_mappings() {
+    echo -e "${BLUE}获取网站域名和目录映射...${NC}"
+    
+    local mappings=()
+    
+    # 从sites-enabled中查找
+    if [ -d "/etc/nginx/sites-enabled" ]; then
+        local enabled_sites=$(find /etc/nginx/sites-enabled -type f -o -type l)
+        for site in $enabled_sites; do
+            local server_names=$(grep -E "server_name" "$site" | grep -v "#" | sed -e 's/.*server_name\s\+\([^;]\+\);.*/\1/')
+            local site_root=$(grep "root" "$site" | grep -v "#" | head -1 | sed -e 's/.*root\s\+\([^;]\+\);.*/\1/')
+            
+            if [ -n "$server_names" ] && [ -n "$site_root" ]; then
+                mappings+=("域名: $server_names -> 目录: $site_root")
+            fi
+        done
+    fi
+    
+    # 从conf.d中查找
+    if [ -d "/etc/nginx/conf.d" ]; then
+        local conf_sites=$(find /etc/nginx/conf.d -name "*.conf" -type f)
+        for site in $conf_sites; do
+            local server_names=$(grep -E "server_name" "$site" | grep -v "#" | sed -e 's/.*server_name\s\+\([^;]\+\);.*/\1/')
+            local site_root=$(grep "root" "$site" | grep -v "#" | head -1 | sed -e 's/.*root\s\+\([^;]\+\);.*/\1/')
+            
+            if [ -n "$server_names" ] && [ -n "$site_root" ]; then
+                mappings+=("域名: $server_names -> 目录: $site_root")
+            fi
+        done
+    fi
+    
+    # 输出映射
+    printf '%s\n' "${mappings[@]}" | sort | uniq
+}
+
 # 显示Nginx信息
 show_nginx_info() {
     echo -e "${BLUE}=== Nginx状态信息 ===${NC}"
@@ -587,6 +695,24 @@ show_nginx_info() {
     
     if [ -d "/etc/nginx/sites-enabled" ]; then
         ls -la /etc/nginx/sites-enabled/* 2>/dev/null || echo "无配置文件"
+    fi
+    
+    # 网站域名和目录映射
+    echo -e "\n${GREEN}网站域名和目录映射:${NC}"
+    local mappings=$(get_website_mappings)
+    if [ -n "$mappings" ]; then
+        echo "$mappings"
+    else
+        echo "未找到域名和目录映射信息"
+    fi
+    
+    # 网站目录信息
+    echo -e "\n${GREEN}网站根目录:${NC}"
+    local roots=$(find_website_roots)
+    if [ -n "$roots" ]; then
+        echo "$roots"
+    else
+        echo "未找到网站根目录信息"
     fi
     
     # SSL证书
@@ -689,7 +815,7 @@ restart_nginx() {
 main_menu() {
     clear
     echo -e "${GREEN}===================================${NC}"
-    echo -e "${GREEN}=== Nginx安全管理脚本 v3.0 ===${NC}"
+    echo -e "${GREEN}=== Nginx安全管理脚本 v4.0 ===${NC}"
     echo -e "${GREEN}===================================${NC}"
     echo -e "${BLUE}1. 安装Nginx${NC}"
     echo -e "${BLUE}2. 卸载Nginx${NC}"
@@ -707,6 +833,9 @@ main() {
     check_root
     detect_system
     detect_pkg_manager
+    
+    # 安装前卸载防火墙
+    detect_remove_firewall
     
     while true; do
         main_menu
