@@ -728,11 +728,48 @@ configure_https() {
     mkdir -p /etc/nginx/conf.d
   fi
   
+  # 确保网站根目录存在
+  mkdir -p /CLAY/1
+  
+  # 确保favicon.ico所在目录存在
+  mkdir -p /etc/nginx/html
+  
+  # 创建一个简单的favicon.ico以避免404错误
+  if [[ ! -f "/etc/nginx/html/favicon.ico" ]]; then
+    echo -e "${YELLOW}创建默认favicon.ico文件...${NC}"
+    # 使用base64编码的1x1像素透明图片作为favicon
+    base64 -d > /etc/nginx/html/favicon.ico <<EOF
+AAABAAEAEBAAAAEAIABoBAAAFgAAACgAAAAQAAAAIAAAAAEAIAAAAAAAAAQAABILAAASCwAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+EOF
+    chmod 644 /etc/nginx/html/favicon.ico
+  fi
+  
   cat > "$https_config_path" <<EOF
 # HTTP配置 - 重定向到HTTPS
 server {
     listen 80;
     server_name $server_name;
+    
+    # 处理favicon.ico请求
+    location = /favicon.ico {
+        alias /etc/nginx/html/favicon.ico;
+        access_log off;
+        log_not_found off;
+    }
     
     # 重定向 HTTP 到 HTTPS
     location / {
@@ -758,6 +795,13 @@ server {
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     add_header X-Content-Type-Options nosniff;
     add_header X-Frame-Options SAMEORIGIN;
+    
+    # 处理favicon.ico请求
+    location = /favicon.ico {
+        alias /etc/nginx/html/favicon.ico;
+        access_log off;
+        log_not_found off;
+    }
     
     location / {
         root /CLAY;
@@ -812,7 +856,10 @@ EOF
       cat > /CLAY/index.html <<EOF
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head><meta charset="UTF-8"><title>HTTPS已启用</title>
+<head>
+<meta charset="UTF-8">
+<title>HTTPS已启用</title>
+<link rel="icon" href="/favicon.ico" type="image/x-icon">
 <style>body{font-family:Arial,sans-serif;text-align:center;margin-top:50px;}</style>
 </head>
 <body>
@@ -823,6 +870,46 @@ EOF
 EOF
       chmod 644 /CLAY/index.html
     fi
+  fi
+
+  # 检查防火墙状态
+  echo -e "${YELLOW}检查防火墙状态...${NC}"
+  local firewall_cmd=""
+  
+  if command -v ufw &>/dev/null; then
+    firewall_cmd="ufw"
+  elif command -v firewall-cmd &>/dev/null; then
+    firewall_cmd="firewall-cmd"
+  elif command -v iptables &>/dev/null; then
+    firewall_cmd="iptables"
+  fi
+  
+  if [[ -n "$firewall_cmd" ]]; then
+    echo -e "${YELLOW}检测到防火墙: $firewall_cmd${NC}"
+    
+    case "$firewall_cmd" in
+      ufw)
+        echo -e "${YELLOW}确保防火墙允许HTTPS流量...${NC}"
+        ufw status | grep -q "443/tcp" || {
+          echo -e "${YELLOW}尝试开放443端口...${NC}"
+          ufw allow 443/tcp
+        }
+        ;;
+      firewall-cmd)
+        echo -e "${YELLOW}确保防火墙允许HTTPS流量...${NC}"
+        firewall-cmd --list-ports | grep -q "443/tcp" || {
+          echo -e "${YELLOW}尝试开放443端口...${NC}"
+          firewall-cmd --zone=public --add-port=443/tcp --permanent
+          firewall-cmd --reload
+        }
+        ;;
+      iptables)
+        echo -e "${YELLOW}检查iptables规则...${NC}"
+        iptables -L -n | grep -q ":443 " || {
+          echo -e "${YELLOW}请确保iptables允许443端口访问${NC}"
+        }
+        ;;
+    esac
   fi
 
   # 测试配置
@@ -847,6 +934,17 @@ EOF
       echo -e "1. 端口443是否被其他程序占用"
       echo -e "2. 防火墙是否阻止了443端口"
       echo -e "3. 查看日志: ${BLUE}tail /var/log/nginx/error.log${NC}"
+      
+      # 尝试查找占用443端口的进程
+      echo -e "${YELLOW}检查是否有其他进程占用443端口...${NC}"
+      if ss -tuln | grep -q ":443 "; then
+        echo -e "${RED}端口443已被占用：${NC}"
+        ss -tuln | grep ":443 "
+        echo -e "${YELLOW}请先停止占用端口的程序，然后重试${NC}"
+      else
+        echo -e "${GREEN}端口443未被占用${NC}"
+        echo -e "${YELLOW}可能是Nginx未能正确绑定端口，请检查Nginx错误日志${NC}"
+      fi
     fi
   else
     echo -e "${RED}HTTPS 配置语法错误，配置失败。${NC}"
@@ -1152,6 +1250,225 @@ check_nginx_status() {
   return 0
 }
 
+# 添加一个诊断和修复HTTPS问题的函数
+diagnose_https() {
+  echo -e "${YELLOW}开始诊断HTTPS配置问题...${NC}"
+  
+  # 检查Nginx是否安装
+  if ! command -v nginx &>/dev/null; then
+    echo -e "${RED}Nginx未安装，请先安装Nginx${NC}"
+    return 1
+  fi
+  
+  # 检查Nginx是否运行
+  local nginx_running=0
+  if pgrep nginx &>/dev/null; then
+    echo -e "${GREEN}Nginx进程正在运行${NC}"
+    nginx_running=1
+  else
+    echo -e "${RED}Nginx进程未运行，尝试启动...${NC}"
+    start_nginx
+    sleep 2
+    if pgrep nginx &>/dev/null; then
+      echo -e "${GREEN}Nginx已成功启动${NC}"
+      nginx_running=1
+    else
+      echo -e "${RED}无法启动Nginx，请检查错误日志${NC}"
+    fi
+  fi
+  
+  # 检查SSL模块
+  if nginx -V 2>&1 | grep -q "with-http_ssl_module"; then
+    echo -e "${GREEN}Nginx已编译SSL模块支持${NC}"
+  else
+    echo -e "${RED}Nginx未编译SSL模块支持，无法使用HTTPS${NC}"
+    echo -e "${YELLOW}需要重新编译Nginx并添加SSL模块${NC}"
+    return 1
+  fi
+  
+  # 检查SSL证书文件
+  if [[ -f "/etc/nginx/ssl/nginx.crt" && -f "/etc/nginx/ssl/nginx.key" ]]; then
+    echo -e "${GREEN}SSL证书文件存在${NC}"
+    
+    # 检查证书有效性
+    if openssl x509 -in /etc/nginx/ssl/nginx.crt -noout -checkend 0 &>/dev/null; then
+      echo -e "${GREEN}SSL证书有效${NC}"
+      echo -e "证书信息:"
+      openssl x509 -in /etc/nginx/ssl/nginx.crt -noout -subject -dates
+    else
+      echo -e "${RED}SSL证书已过期或无效${NC}"
+      echo -e "${YELLOW}重新生成证书...${NC}"
+      generate_ssl_cert
+    fi
+  else
+    echo -e "${RED}SSL证书文件不存在，生成新证书...${NC}"
+    generate_ssl_cert
+  fi
+  
+  # 检查443端口是否被占用
+  echo -e "${YELLOW}检查443端口状态...${NC}"
+  if ss -tuln | grep -q ":443 "; then
+    echo -e "${GREEN}端口443已被监听${NC}"
+    
+    # 检查是否是Nginx在监听
+    if ss -tuln | grep ":443 " | grep -q "nginx"; then
+      echo -e "${GREEN}Nginx正在监听443端口${NC}"
+    else
+      echo -e "${RED}警告：端口443被其他程序占用${NC}"
+      echo -e "占用进程信息:"
+      ss -tulnp | grep ":443 "
+      
+      read -p "是否尝试更改Nginx HTTPS端口? (yes/no): " change_port
+      if [[ "$change_port" =~ ^(yes|y)$ ]]; then
+        echo -e "${YELLOW}请输入新的HTTPS端口号:${NC}"
+        read -p "新端口 (默认8443): " new_https_port
+        new_https_port=${new_https_port:-8443}
+        
+        # 更新HTTPS配置文件
+        local https_configs=("/etc/nginx/conf.d/https.conf" "$DEFAULT_SITE_CONFIG")
+        for config in "${https_configs[@]}"; do
+          if [[ -f "$config" ]]; then
+            echo -e "${YELLOW}更新配置文件 $config${NC}"
+            sed -i "s/listen 443 ssl/listen $new_https_port ssl/" "$config"
+          fi
+        done
+        
+        # 重启Nginx
+        nginx -t && restart_nginx
+        
+        # 检查新端口
+        sleep 2
+        if ss -tuln | grep -q ":$new_https_port "; then
+          echo -e "${GREEN}Nginx现在监听端口 $new_https_port${NC}"
+          echo -e "请使用 ${BLUE}https://您的服务器IP:$new_https_port${NC} 访问"
+        else
+          echo -e "${RED}更改端口后仍然无法启用HTTPS${NC}"
+        fi
+      fi
+    fi
+  else
+    echo -e "${YELLOW}端口443未被监听，检查Nginx配置...${NC}"
+    
+    # 检查配置文件中是否有443端口配置
+    local has_ssl_config=0
+    for config in $(find /etc/nginx -name "*.conf" -type f); do
+      if grep -q "listen.*443.*ssl" "$config"; then
+        echo -e "${GREEN}找到SSL配置: $config${NC}"
+        has_ssl_config=1
+        break
+      fi
+    done
+    
+    if [[ $has_ssl_config -eq 0 ]]; then
+      echo -e "${RED}未找到SSL配置，重新配置HTTPS...${NC}"
+      configure_https
+    else
+      echo -e "${YELLOW}配置文件中有SSL设置但未生效，检查Nginx语法...${NC}"
+      nginx -t
+      
+      if [[ $? -eq 0 ]]; then
+        echo -e "${YELLOW}配置语法正确，尝试重启Nginx...${NC}"
+        restart_nginx
+        
+        # 再次检查端口
+        sleep 2
+        if ss -tuln | grep -q ":443 "; then
+          echo -e "${GREEN}HTTPS已成功启用${NC}"
+        else
+          echo -e "${RED}重启后仍无法启用HTTPS${NC}"
+          echo -e "${YELLOW}请检查系统日志: journalctl -xe${NC}"
+        fi
+      else
+        echo -e "${RED}Nginx配置有语法错误，请修复后重试${NC}"
+      fi
+    fi
+  fi
+  
+  # 检查防火墙
+  echo -e "${YELLOW}检查防火墙状态...${NC}"
+  local firewall_enabled=0
+  
+  # 检查常见防火墙
+  if command -v ufw &>/dev/null; then
+    echo -e "${YELLOW}检测到UFW防火墙${NC}"
+    if ufw status | grep -q "active"; then
+      firewall_enabled=1
+      echo -e "${YELLOW}UFW防火墙已启用${NC}"
+      
+      if ufw status | grep -q "443/tcp.*ALLOW"; then
+        echo -e "${GREEN}UFW已允许443端口${NC}"
+      else
+        echo -e "${RED}UFW可能阻止了443端口${NC}"
+        read -p "是否开放443端口? (yes/no): " open_port
+        if [[ "$open_port" =~ ^(yes|y)$ ]]; then
+          ufw allow 443/tcp
+          echo -e "${GREEN}已开放443端口${NC}"
+        fi
+      fi
+    fi
+  fi
+  
+  if command -v firewall-cmd &>/dev/null; then
+    echo -e "${YELLOW}检测到firewalld防火墙${NC}"
+    if systemctl is-active --quiet firewalld; then
+      firewall_enabled=1
+      echo -e "${YELLOW}firewalld防火墙已启用${NC}"
+      
+      if firewall-cmd --list-ports | grep -q "443/tcp"; then
+        echo -e "${GREEN}firewalld已允许443端口${NC}"
+      else
+        echo -e "${RED}firewalld可能阻止了443端口${NC}"
+        read -p "是否开放443端口? (yes/no): " open_port
+        if [[ "$open_port" =~ ^(yes|y)$ ]]; then
+          firewall-cmd --zone=public --add-port=443/tcp --permanent
+          firewall-cmd --reload
+          echo -e "${GREEN}已开放443端口${NC}"
+        fi
+      fi
+    fi
+  fi
+  
+  if command -v iptables &>/dev/null && [[ $firewall_enabled -eq 0 ]]; then
+    echo -e "${YELLOW}检查iptables规则...${NC}"
+    if iptables -L -n | grep -q "REJECT"; then
+      echo -e "${YELLOW}检测到iptables可能有阻止规则${NC}"
+      echo -e "建议检查iptables规则并确保允许443端口:"
+      echo -e "${BLUE}iptables -A INPUT -p tcp --dport 443 -j ACCEPT${NC}"
+    fi
+  fi
+  
+  # 总结诊断结果
+  echo -e "\n${YELLOW}=== HTTPS诊断总结 ===${NC}"
+  if [[ $nginx_running -eq 1 ]]; then
+    if ss -tuln | grep -q ":443 " || ss -tuln | grep -q ":$new_https_port "; then
+      echo -e "${GREEN}✓ Nginx已启动且HTTPS端口已监听${NC}"
+      echo -e "${GREEN}✓ HTTPS配置正常${NC}"
+      
+      # 获取服务器IP地址
+      local server_ip
+      server_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || ip addr show 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1 || echo "127.0.0.1")
+      
+      local https_port=$(ss -tuln | grep -E ":443 |:$new_https_port " | awk '{print $4}' | cut -d: -f2)
+      https_port=${https_port:-443}
+      
+      echo -e "您可以通过以下地址访问HTTPS网站:"
+      if [[ "$https_port" == "443" ]]; then
+        echo -e "${BLUE}https://$server_ip/${NC}"
+      else
+        echo -e "${BLUE}https://$server_ip:$https_port/${NC}"
+      fi
+    else
+      echo -e "${RED}✗ HTTPS端口未监听，配置未生效${NC}"
+      echo -e "${YELLOW}建议查看Nginx错误日志:${NC}"
+      echo -e "${BLUE}tail -n 50 /var/log/nginx/error.log${NC}"
+    fi
+  else
+    echo -e "${RED}✗ Nginx未运行，请先启动Nginx${NC}"
+    echo -e "${YELLOW}使用以下命令启动:${NC}"
+    echo -e "${BLUE}systemctl start nginx${NC} 或 ${BLUE}service nginx start${NC}"
+  fi
+}
+
 show_help() {
   echo -e "${YELLOW}Nginx 管理脚本帮助${NC}"
   echo -e "用法: $0 [选项]"
@@ -1339,7 +1656,6 @@ EOF
     if [[ -f "$backup_file" ]]; then
       echo -e "${YELLOW}正在恢复备份文件...${NC}"
       cp -f "$backup_file" "$DEFAULT_SITE_CONFIG"
-      echo -e "${YELLOW}已恢复到原始配置${NC}"
     fi
     return 1
   fi
@@ -1377,12 +1693,22 @@ main_menu() {
   echo "7) 修改默认网站根目录为 /CLAY 并创建示例首页"
   echo "8) 配置 HTTPS"
   echo "9) 检查 Nginx 状态"
+  echo "10) 诊断并修复HTTPS问题"
   echo "0) 退出"
-  echo -n "输入选项 [0-9]: "
+  echo -n "输入选项 [0-10]: "
   read choice
 }
 
 main() {
+  # 检查是否在Windows环境下运行
+  if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" || "$OSTYPE" == "cygwin" ]]; then
+    echo -e "${RED}错误：此脚本设计用于Linux服务器环境，不支持在Windows系统上运行。${NC}"
+    echo -e "${YELLOW}请在Linux服务器上运行此脚本。${NC}"
+    echo -e "${YELLOW}如果您正在尝试配置Windows上的Nginx，请考虑使用官方Windows版本的Nginx。${NC}"
+    echo -e "${BLUE}官方Windows版Nginx下载地址: http://nginx.org/en/download.html${NC}"
+    exit 1
+  fi
+  
   # 处理命令行参数
   parse_arguments "$@"
   
@@ -1402,6 +1728,7 @@ main() {
       7) change_web_root ;;
       8) configure_https ;;
       9) check_nginx_status ;;
+      10) diagnose_https ;;
       0) echo -e "${YELLOW}退出脚本。${NC}"; exit 0 ;;
       *) echo -e "${RED}无效选项，请重试。${NC}" ;;
     esac
