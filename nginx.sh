@@ -660,38 +660,95 @@ configure_https() {
     fi
   fi
   
-  # 检查是否已安装 SSL 证书
-  if [[ -f "/etc/nginx/ssl/nginx.crt" && -f "/etc/nginx/ssl/nginx.key" ]]; then
-    echo -e "${YELLOW}检测到已存在的 SSL 证书${NC}"
-    read -p "是否重新生成 SSL 证书？(yes/no): " regen_cert
-    if [[ ! "$regen_cert" =~ ^(yes|y)$ ]]; then
-      echo -e "${GREEN}保留现有证书${NC}"
+  # 询问是否使用自定义证书
+  echo -e "${YELLOW}SSL证书选项:${NC}"
+  echo "1) 自动生成自签名证书"
+  echo "2) 使用自定义证书文件"
+  read -p "请选择 [1/2]: " cert_option
+  
+  local ssl_cert_path="/etc/nginx/ssl/nginx.crt"
+  local ssl_key_path="/etc/nginx/ssl/nginx.key"
+  
+  if [[ "$cert_option" == "2" ]]; then
+    echo -e "${YELLOW}请输入SSL证书文件的完整路径:${NC}"
+    read -p "证书文件路径 (.crt/.pem): " custom_cert_path
+    
+    if [[ ! -f "$custom_cert_path" ]]; then
+      echo -e "${RED}错误: 证书文件不存在: $custom_cert_path${NC}"
+      return 1
+    fi
+    
+    echo -e "${YELLOW}请输入SSL私钥文件的完整路径:${NC}"
+    read -p "私钥文件路径 (.key): " custom_key_path
+    
+    if [[ ! -f "$custom_key_path" ]]; then
+      echo -e "${RED}错误: 私钥文件不存在: $custom_key_path${NC}"
+      return 1
+    fi
+    
+    # 验证证书和私钥是否匹配
+    echo -e "${YELLOW}验证证书和私钥是否匹配...${NC}"
+    cert_md5=$(openssl x509 -noout -modulus -in "$custom_cert_path" 2>/dev/null | openssl md5)
+    key_md5=$(openssl rsa -noout -modulus -in "$custom_key_path" 2>/dev/null | openssl md5)
+    
+    if [[ "$cert_md5" != "$key_md5" ]]; then
+      echo -e "${RED}错误: 证书和私钥不匹配${NC}"
+      echo -e "证书MD5: $cert_md5"
+      echo -e "私钥MD5: $key_md5"
+      read -p "是否仍然继续? (yes/no): " continue_mismatch
+      if [[ ! "$continue_mismatch" =~ ^(yes|y)$ ]]; then
+        echo -e "${YELLOW}HTTPS配置已取消${NC}"
+        return 1
+      fi
+    else
+      echo -e "${GREEN}证书和私钥匹配验证成功${NC}"
+    fi
+    
+    # 创建SSL目录并复制证书
+    mkdir -p /etc/nginx/ssl
+    cp "$custom_cert_path" "$ssl_cert_path"
+    cp "$custom_key_path" "$ssl_key_path"
+    
+    echo -e "${GREEN}已复制自定义证书到: $ssl_cert_path${NC}"
+    echo -e "${GREEN}已复制自定义私钥到: $ssl_key_path${NC}"
+    
+    # 显示证书信息
+    echo -e "${YELLOW}证书信息:${NC}"
+    openssl x509 -in "$ssl_cert_path" -noout -subject -issuer -dates
+  else
+    # 检查是否已安装 SSL 证书
+    if [[ -f "$ssl_cert_path" && -f "$ssl_key_path" ]]; then
+      echo -e "${YELLOW}检测到已存在的 SSL 证书${NC}"
+      read -p "是否重新生成 SSL 证书？(yes/no): " regen_cert
+      if [[ ! "$regen_cert" =~ ^(yes|y)$ ]]; then
+        echo -e "${GREEN}保留现有证书${NC}"
+      else
+        generate_ssl_cert || {
+          echo -e "${RED}SSL证书生成失败，无法配置HTTPS${NC}"
+          return 1
+        }
+      fi
     else
       generate_ssl_cert || {
         echo -e "${RED}SSL证书生成失败，无法配置HTTPS${NC}"
         return 1
       }
     fi
-  else
-    generate_ssl_cert || {
-      echo -e "${RED}SSL证书生成失败，无法配置HTTPS${NC}"
-      return 1
-    }
   fi
   
   # 确保证书权限正确且Nginx可以读取
-  if [[ -f "/etc/nginx/ssl/nginx.key" ]]; then
+  if [[ -f "$ssl_key_path" ]]; then
     # 获取Nginx用户
     local nginx_user=$(grep -E "^user" /etc/nginx/nginx.conf 2>/dev/null | awk '{print $2}' | sed 's/;$//')
     nginx_user=${nginx_user:-"www-data"}
     
     echo -e "${YELLOW}设置证书权限，确保Nginx用户($nginx_user)可访问...${NC}"
-    chmod 600 /etc/nginx/ssl/nginx.key
-    chmod 644 /etc/nginx/ssl/nginx.crt
+    chmod 600 "$ssl_key_path"
+    chmod 644 "$ssl_cert_path"
     
     # 尝试设置所有者，但不强制要求成功
-    chown $nginx_user:$nginx_user /etc/nginx/ssl/nginx.key 2>/dev/null || true
-    chown $nginx_user:$nginx_user /etc/nginx/ssl/nginx.crt 2>/dev/null || true
+    chown $nginx_user:$nginx_user "$ssl_key_path" 2>/dev/null || true
+    chown $nginx_user:$nginx_user "$ssl_cert_path" 2>/dev/null || true
   fi
   
   # 检查配置文件是否存在
@@ -739,21 +796,7 @@ configure_https() {
     echo -e "${YELLOW}创建默认favicon.ico文件...${NC}"
     # 使用base64编码的1x1像素透明图片作为favicon
     base64 -d > /etc/nginx/html/favicon.ico <<EOF
-AAABAAEAEBAAAAEAIABoBAAAFgAAACgAAAAQAAAAIAAAAAEAIAAAAAAAAAQAABILAAASCwAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAABAAEAEBAAAAEAIABoBAAAFgAAACgAAAAQAAAAIAAAAAEAIAAAAAAAAAQAABILAAASCwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 EOF
     chmod 644 /etc/nginx/html/favicon.ico
   fi
@@ -782,8 +825,8 @@ server {
     listen 443 ssl;
     server_name $server_name;
     
-    ssl_certificate     /etc/nginx/ssl/nginx.crt;
-    ssl_certificate_key /etc/nginx/ssl/nginx.key;
+    ssl_certificate     $ssl_cert_path;
+    ssl_certificate_key $ssl_key_path;
     
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers on;
@@ -803,17 +846,27 @@ server {
         log_not_found off;
     }
     
+    # 支持/CLAY目录下所有文件访问
     location / {
         root /CLAY;
         index index.html index.htm;
     }
     
-    location /1/ {
-        alias /CLAY/1/;
-        autoindex on;
+    # 支持所有子目录的视频播放
+    location ~* ^/(.+/)*(.*\.(mp4|flv|m3u8|ts|m4v|mov|wmv|avi))$ {
+        root /CLAY;
         mp4;
         mp4_buffer_size 1m;
         mp4_max_buffer_size 5m;
+        add_header Cache-Control "public, max-age=3600";
+    }
+    
+    # 支持目录浏览
+    location ~* ^/(.+/)*$ {
+        root /CLAY;
+        autoindex on;
+        autoindex_exact_size off;
+        autoindex_localtime on;
     }
 }
 EOF
@@ -1059,8 +1112,88 @@ EOF
   return $?
 }
 
+# 创建示例视频文件用于测试
+create_sample_video() {
+  echo -e "${YELLOW}创建示例视频文件用于测试...${NC}"
+  
+  # 确保目录存在
+  mkdir -p /CLAY/1
+  mkdir -p /CLAY/samples
+  mkdir -p /CLAY/videos/test
+  
+  # 检查是否已存在示例视频
+  if [[ -f "/CLAY/1/sample.mp4" ]]; then
+    echo -e "${GREEN}示例视频文件已存在${NC}"
+    return 0
+  fi
+  
+  # 使用base64编码的1秒视频文件（黑色背景，白色文字"测试视频"）
+  echo -e "${YELLOW}生成测试视频文件...${NC}"
+  
+  # 检查是否安装了ffmpeg
+  if ! command -v ffmpeg &>/dev/null; then
+    echo -e "${YELLOW}未检测到ffmpeg，尝试安装...${NC}"
+    case "$PACKAGE_MANAGER" in
+      apt)
+        apt update && apt install -y ffmpeg
+        ;;
+      yum)
+        yum install -y epel-release && yum install -y ffmpeg
+        ;;
+      zypper)
+        zypper --non-interactive install ffmpeg
+        ;;
+      pacman)
+        pacman -Sy --noconfirm ffmpeg
+        ;;
+      *)
+        echo -e "${RED}无法自动安装ffmpeg，将创建空文件作为示例${NC}"
+        touch /CLAY/1/sample.mp4
+        touch /CLAY/samples/test.mp4
+        touch /CLAY/videos/test/example.mp4
+        return 0
+        ;;
+    esac
+  fi
+  
+  if command -v ffmpeg &>/dev/null; then
+    # 创建测试视频
+    ffmpeg -f lavfi -i color=c=black:s=640x360:d=5 -vf "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='测试视频':fontcolor=white:fontsize=60:x=(w-text_w)/2:y=(h-text_h)/2" -c:v libx264 -tune stillimage -pix_fmt yuv420p /CLAY/1/sample.mp4 -y &>/dev/null || {
+      echo -e "${RED}无法创建视频文件，创建空文件作为替代${NC}"
+      touch /CLAY/1/sample.mp4
+    }
+    
+    # 复制到其他目录
+    cp /CLAY/1/sample.mp4 /CLAY/samples/test.mp4 2>/dev/null || touch /CLAY/samples/test.mp4
+    cp /CLAY/1/sample.mp4 /CLAY/videos/test/example.mp4 2>/dev/null || touch /CLAY/videos/test/example.mp4
+    
+    echo -e "${GREEN}已创建示例视频文件:${NC}"
+    echo -e "  - /CLAY/1/sample.mp4"
+    echo -e "  - /CLAY/samples/test.mp4"
+    echo -e "  - /CLAY/videos/test/example.mp4"
+  else
+    # 如果ffmpeg安装失败，创建空文件
+    touch /CLAY/1/sample.mp4
+    touch /CLAY/samples/test.mp4
+    touch /CLAY/videos/test/example.mp4
+    echo -e "${YELLOW}已创建空的示例视频文件${NC}"
+  fi
+  
+  # 确保文件权限正确
+  chmod 644 /CLAY/1/sample.mp4
+  chmod 644 /CLAY/samples/test.mp4
+  chmod 644 /CLAY/videos/test/example.mp4
+  
+  # 尝试设置正确的所有者
+  local nginx_user=$(grep -E "^user" /etc/nginx/nginx.conf 2>/dev/null | awk '{print $2}' | sed 's/;$//')
+  nginx_user=${nginx_user:-"www-data"}
+  chown $nginx_user:$nginx_user /CLAY/1/sample.mp4 2>/dev/null || true
+  chown $nginx_user:$nginx_user /CLAY/samples/test.mp4 2>/dev/null || true
+  chown $nginx_user:$nginx_user /CLAY/videos/test/example.mp4 2>/dev/null || true
+}
+
 configure_clay_video_access() {
-  echo -e "${YELLOW}配置 Nginx 支持访问 /CLAY/1 目录的视频播放...${NC}"
+  echo -e "${YELLOW}配置 Nginx 支持访问 /CLAY 目录及所有子目录的视频播放...${NC}"
 
   # 确保配置文件存在
   if [[ ! -f "$DEFAULT_SITE_CONFIG" ]]; then
@@ -1091,17 +1224,34 @@ server {
     listen 80;
     server_name localhost;
     
+    # 处理favicon.ico请求
+    location = /favicon.ico {
+        alias /etc/nginx/html/favicon.ico;
+        access_log off;
+        log_not_found off;
+    }
+    
+    # 支持/CLAY目录下所有文件访问
     location / {
         root /CLAY;
         index index.html index.htm;
     }
     
-    location /1/ {
-        alias /CLAY/1/;
-        autoindex on;
+    # 支持所有子目录的视频播放
+    location ~* ^/(.+/)*(.*\.(mp4|flv|m3u8|ts|m4v|mov|wmv|avi))$ {
+        root /CLAY;
         mp4;
         mp4_buffer_size 1m;
         mp4_max_buffer_size 5m;
+        add_header Cache-Control "public, max-age=3600";
+    }
+    
+    # 支持目录浏览
+    location ~* ^/(.+/)*$ {
+        root /CLAY;
+        autoindex on;
+        autoindex_exact_size off;
+        autoindex_localtime on;
     }
 }
 EOF
@@ -1120,16 +1270,27 @@ EOF
     echo -e "${GREEN}已创建视频访问配置文件：${site_config}${NC}"
   else
     # 移除已有的视频配置（如果存在）
+    sed -i '/location ~\* \^\/(.+\/)*(.*\\.(mp4|flv|m3u8|ts|m4v|mov|wmv|avi))/,/\}/d' "$DEFAULT_SITE_CONFIG" 2>/dev/null
     sed -i '/location \/1\//,/\}/d' "$DEFAULT_SITE_CONFIG" 2>/dev/null
+    sed -i '/location ~\* \^\/(.+\/)*$/,/\}/d' "$DEFAULT_SITE_CONFIG" 2>/dev/null
 
     # 添加新的视频配置
     sed -i "/server {/a \\
-    location /1/ {\\
-        alias /CLAY/1/;\\
-        autoindex on;\\
+    # 支持所有子目录的视频播放\\
+    location ~* ^/(.+/)*(.*\\.(mp4|flv|m3u8|ts|m4v|mov|wmv|avi))$ {\\
+        root /CLAY;\\
         mp4;\\
         mp4_buffer_size 1m;\\
         mp4_max_buffer_size 5m;\\
+        add_header Cache-Control \"public, max-age=3600\";\\
+    }\\
+\\
+    # 支持目录浏览\\
+    location ~* ^/(.+/)*$ {\\
+        root /CLAY;\\
+        autoindex on;\\
+        autoindex_exact_size off;\\
+        autoindex_localtime on;\\
     }" "$DEFAULT_SITE_CONFIG" 2>/dev/null
   fi
 
@@ -1137,14 +1298,85 @@ EOF
     cat > /CLAY/index.html <<EOF
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head><meta charset="UTF-8"><title>视频播放示例</title></head>
+<head>
+<meta charset="UTF-8">
+<title>视频播放示例</title>
+<style>
+body {
+  font-family: Arial, sans-serif;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 20px;
+  line-height: 1.6;
+}
+h1 {
+  color: #333;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 10px;
+}
+.video-container {
+  margin: 20px 0;
+}
+video {
+  max-width: 100%;
+  border: 1px solid #ddd;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+.directory-info {
+  background: #f9f9f9;
+  padding: 15px;
+  border-radius: 5px;
+  margin: 20px 0;
+}
+code {
+  background: #eee;
+  padding: 2px 5px;
+  border-radius: 3px;
+}
+.sample-links {
+  margin: 20px 0;
+}
+.sample-links a {
+  display: block;
+  margin: 5px 0;
+  color: #0066cc;
+}
+</style>
+</head>
 <body>
 <h1>视频播放示例</h1>
-<p>请将视频文件上传到 /CLAY/1 目录，然后访问 /1/视频文件名.mp4 播放。</p>
-<video width="640" height="360" controls>
-  <source src="/1/sample.mp4" type="video/mp4" />
-  您的浏览器不支持 video 标签。
-</video>
+
+<div class="directory-info">
+  <p>此Nginx已配置支持<code>/CLAY</code>目录及其所有子目录下的视频播放。</p>
+  <p>支持的视频格式：MP4, FLV, M3U8, TS, M4V, MOV, WMV, AVI</p>
+  <p>您可以通过以下方式访问视频：</p>
+  <ul>
+    <li>直接访问：<code>http://您的服务器IP/视频文件名.mp4</code></li>
+    <li>子目录访问：<code>http://您的服务器IP/子目录名/视频文件名.mp4</code></li>
+  </ul>
+</div>
+
+<div class="video-container">
+  <h3>示例视频播放器</h3>
+  <video width="640" height="360" controls>
+    <source src="/1/sample.mp4" type="video/mp4" />
+    您的浏览器不支持 video 标签。
+  </video>
+</div>
+
+<div class="sample-links">
+  <h3>示例视频链接</h3>
+  <a href="/1/sample.mp4">示例视频1 - /1/sample.mp4</a>
+  <a href="/samples/test.mp4">示例视频2 - /samples/test.mp4</a>
+  <a href="/videos/test/example.mp4">示例视频3 - /videos/test/example.mp4</a>
+  <a href="/">/CLAY 根目录</a>
+  <a href="/1/">/CLAY/1 目录</a>
+  <a href="/samples/">/CLAY/samples 目录</a>
+  <a href="/videos/test/">/CLAY/videos/test 目录</a>
+</div>
+
+<p>您可以将视频文件上传到<code>/CLAY</code>目录或任意子目录，然后直接通过浏览器访问。</p>
+<p>所有目录已启用自动索引功能，可以浏览目录内容。</p>
 </body>
 </html>
 EOF
@@ -1155,10 +1387,24 @@ EOF
     echo -e "${YELLOW}目录 /CLAY 不存在，示例首页未创建，请自行创建。${NC}"
   fi
 
+  # 创建示例视频文件
+  create_sample_video
+
   nginx -t
   if [[ $? -eq 0 ]]; then
     echo -e "${GREEN}配置语法正确，重启 Nginx...${NC}"
     restart_nginx
+    echo -e "${GREEN}现在您可以在 /CLAY 目录及其所有子目录中播放视频文件了${NC}"
+    echo -e "${YELLOW}支持的视频格式：MP4, FLV, M3U8, TS, M4V, MOV, WMV, AVI${NC}"
+    
+    # 获取服务器IP地址
+    local server_ip
+    server_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || ip addr show 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1 || echo "127.0.0.1")
+    
+    echo -e "${GREEN}您可以通过以下地址访问示例视频：${NC}"
+    echo -e "${BLUE}http://$server_ip/1/sample.mp4${NC}"
+    echo -e "${BLUE}http://$server_ip/samples/test.mp4${NC}"
+    echo -e "${BLUE}http://$server_ip/videos/test/example.mp4${NC}"
   else
     echo -e "${RED}配置语法错误，恢复备份文件。${NC}"
     if [[ -f "$backup_file" ]]; then
@@ -1286,23 +1532,138 @@ diagnose_https() {
     return 1
   fi
   
+  # 查找当前使用的SSL证书路径
+  local current_cert=""
+  local current_key=""
+  
+  for config in $(find /etc/nginx -name "*.conf" -type f); do
+    if grep -q "ssl_certificate" "$config"; then
+      current_cert=$(grep -m 1 "ssl_certificate\s\+" "$config" | awk '{print $2}' | sed 's/;$//')
+      current_key=$(grep -m 1 "ssl_certificate_key" "$config" | awk '{print $2}' | sed 's/;$//')
+      if [[ -n "$current_cert" && -n "$current_key" ]]; then
+        echo -e "${GREEN}找到SSL配置:${NC}"
+        echo -e "证书文件: ${BLUE}$current_cert${NC}"
+        echo -e "私钥文件: ${BLUE}$current_key${NC}"
+        break
+      fi
+    fi
+  done
+  
   # 检查SSL证书文件
-  if [[ -f "/etc/nginx/ssl/nginx.crt" && -f "/etc/nginx/ssl/nginx.key" ]]; then
-    echo -e "${GREEN}SSL证书文件存在${NC}"
-    
-    # 检查证书有效性
-    if openssl x509 -in /etc/nginx/ssl/nginx.crt -noout -checkend 0 &>/dev/null; then
-      echo -e "${GREEN}SSL证书有效${NC}"
-      echo -e "证书信息:"
-      openssl x509 -in /etc/nginx/ssl/nginx.crt -noout -subject -dates
+  if [[ -n "$current_cert" && -n "$current_key" ]]; then
+    if [[ -f "$current_cert" && -f "$current_key" ]]; then
+      echo -e "${GREEN}SSL证书文件存在${NC}"
+      
+      # 检查证书有效性
+      if openssl x509 -in "$current_cert" -noout -checkend 0 &>/dev/null; then
+        echo -e "${GREEN}SSL证书有效${NC}"
+        echo -e "证书信息:"
+        openssl x509 -in "$current_cert" -noout -subject -dates
+      else
+        echo -e "${RED}SSL证书已过期或无效${NC}"
+        echo -e "${YELLOW}是否需要更新证书? (yes/no): ${NC}"
+        read -p "" update_cert
+        if [[ "$update_cert" =~ ^(yes|y)$ ]]; then
+          echo -e "${YELLOW}选择证书更新方式:${NC}"
+          echo "1) 自动生成自签名证书"
+          echo "2) 使用自定义证书文件"
+          read -p "请选择 [1/2]: " cert_option
+          
+          if [[ "$cert_option" == "2" ]]; then
+            echo -e "${YELLOW}请输入SSL证书文件的完整路径:${NC}"
+            read -p "证书文件路径 (.crt/.pem): " custom_cert_path
+            
+            if [[ ! -f "$custom_cert_path" ]]; then
+              echo -e "${RED}错误: 证书文件不存在: $custom_cert_path${NC}"
+              return 1
+            fi
+            
+            echo -e "${YELLOW}请输入SSL私钥文件的完整路径:${NC}"
+            read -p "私钥文件路径 (.key): " custom_key_path
+            
+            if [[ ! -f "$custom_key_path" ]]; then
+              echo -e "${RED}错误: 私钥文件不存在: $custom_key_path${NC}"
+              return 1
+            fi
+            
+            # 验证证书和私钥是否匹配
+            echo -e "${YELLOW}验证证书和私钥是否匹配...${NC}"
+            cert_md5=$(openssl x509 -noout -modulus -in "$custom_cert_path" 2>/dev/null | openssl md5)
+            key_md5=$(openssl rsa -noout -modulus -in "$custom_key_path" 2>/dev/null | openssl md5)
+            
+            if [[ "$cert_md5" != "$key_md5" ]]; then
+              echo -e "${RED}错误: 证书和私钥不匹配${NC}"
+              return 1
+            else
+              echo -e "${GREEN}证书和私钥匹配验证成功${NC}"
+              
+              # 复制证书到当前使用的位置
+              cp "$custom_cert_path" "$current_cert"
+              cp "$custom_key_path" "$current_key"
+              
+              echo -e "${GREEN}已更新证书文件${NC}"
+              restart_nginx
+            fi
+          else
+            # 自动生成证书
+            generate_ssl_cert
+            restart_nginx
+          fi
+        fi
+      fi
     else
-      echo -e "${RED}SSL证书已过期或无效${NC}"
-      echo -e "${YELLOW}重新生成证书...${NC}"
-      generate_ssl_cert
+      echo -e "${RED}SSL证书文件不存在，但在配置中引用:${NC}"
+      echo -e "证书文件: ${RED}$current_cert${NC} (不存在)"
+      echo -e "私钥文件: ${RED}$current_key${NC} (不存在)"
+      
+      echo -e "${YELLOW}是否需要创建证书? (yes/no): ${NC}"
+      read -p "" create_cert
+      if [[ "$create_cert" =~ ^(yes|y)$ ]]; then
+        echo -e "${YELLOW}选择证书创建方式:${NC}"
+        echo "1) 自动生成自签名证书"
+        echo "2) 使用自定义证书文件"
+        read -p "请选择 [1/2]: " cert_option
+        
+        if [[ "$cert_option" == "2" ]]; then
+          echo -e "${YELLOW}请输入SSL证书文件的完整路径:${NC}"
+          read -p "证书文件路径 (.crt/.pem): " custom_cert_path
+          
+          if [[ ! -f "$custom_cert_path" ]]; then
+            echo -e "${RED}错误: 证书文件不存在: $custom_cert_path${NC}"
+            return 1
+          fi
+          
+          echo -e "${YELLOW}请输入SSL私钥文件的完整路径:${NC}"
+          read -p "私钥文件路径 (.key): " custom_key_path
+          
+          if [[ ! -f "$custom_key_path" ]]; then
+            echo -e "${RED}错误: 私钥文件不存在: $custom_key_path${NC}"
+            return 1
+          fi
+          
+          # 创建目录并复制证书
+          mkdir -p $(dirname "$current_cert")
+          mkdir -p $(dirname "$current_key")
+          cp "$custom_cert_path" "$current_cert"
+          cp "$custom_key_path" "$current_key"
+          
+          echo -e "${GREEN}已复制自定义证书${NC}"
+          restart_nginx
+        else
+          # 自动生成证书
+          generate_ssl_cert
+          restart_nginx
+        fi
+      fi
     fi
   else
-    echo -e "${RED}SSL证书文件不存在，生成新证书...${NC}"
-    generate_ssl_cert
+    echo -e "${RED}未找到SSL证书配置，需要重新配置HTTPS${NC}"
+    echo -e "${YELLOW}是否现在配置HTTPS? (yes/no): ${NC}"
+    read -p "" setup_https
+    if [[ "$setup_https" =~ ^(yes|y)$ ]]; then
+      configure_https
+      return $?
+    fi
   fi
   
   # 检查443端口是否被占用
@@ -1361,7 +1722,12 @@ diagnose_https() {
     
     if [[ $has_ssl_config -eq 0 ]]; then
       echo -e "${RED}未找到SSL配置，重新配置HTTPS...${NC}"
-      configure_https
+      echo -e "${YELLOW}是否现在配置HTTPS? (yes/no): ${NC}"
+      read -p "" setup_https
+      if [[ "$setup_https" =~ ^(yes|y)$ ]]; then
+        configure_https
+        return $?
+      fi
     else
       echo -e "${YELLOW}配置文件中有SSL设置但未生效，检查Nginx语法...${NC}"
       nginx -t
@@ -1377,6 +1743,7 @@ diagnose_https() {
         else
           echo -e "${RED}重启后仍无法启用HTTPS${NC}"
           echo -e "${YELLOW}请检查系统日志: journalctl -xe${NC}"
+          echo -e "${YELLOW}检查错误日志: tail -n 50 /var/log/nginx/error.log${NC}"
         fi
       else
         echo -e "${RED}Nginx配置有语法错误，请修复后重试${NC}"
