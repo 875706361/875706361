@@ -1,5 +1,5 @@
 #!/bin/bash
-# Nginx全自动管理脚本 v2.0 - 支持全Linux发行版和HTTPS智能配置
+# Nginx全自动管理脚本 v3.0 - 支持全Linux发行版和HTTPS智能配置
 
 # 颜色定义
 RED='\033[0;31m'
@@ -10,11 +10,21 @@ NC='\033[0m'
 
 # 初始化日志文件
 LOG_FILE="/var/log/nginx-manager.log"
+mkdir -p "$(dirname "$LOG_FILE")"
+touch "$LOG_FILE"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # 错误处理
 set -eo pipefail
 trap "echo -e '${RED}脚本异常退出! 查看日志: $LOG_FILE${NC}'" ERR
+
+# 检查root权限
+check_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        echo -e "${RED}请使用root权限运行此脚本${NC}"
+        exit 1
+    fi
+}
 
 # 系统检测函数
 detect_system() {
@@ -32,27 +42,26 @@ detect_system() {
         OS=$(uname -s)
         VER=$(uname -r)
     fi
-    
     echo -e "${BLUE}检测到系统: $OS $VER${NC}"
 }
 
 # 包管理器检测
 detect_pkg_manager() {
     case $OS in
-        ubuntu|debian|linuxmint)
+        ubuntu|debian|linuxmint|kali)
             PKG_MANAGER="apt"
             INSTALL_CMD="apt update && apt install -y"
             REMOVE_CMD="apt purge -y"
             ;;
-        centos|rhel|fedora|amazon|rocky)
-            if [ "$OS" = "centos" ] && [ "$VER" -lt 8 ]; then
-                PKG_MANAGER="yum"
-                INSTALL_CMD="yum install -y"
-                REMOVE_CMD="yum remove -y"
-            else
+        centos|rhel|fedora|amazon|rocky|alma|ol)
+            if [ -n "$VER" ] && [ "$VER" -ge 8 ]; then
                 PKG_MANAGER="dnf"
                 INSTALL_CMD="dnf install -y"
                 REMOVE_CMD="dnf remove -y"
+            else
+                PKG_MANAGER="yum"
+                INSTALL_CMD="yum install -y"
+                REMOVE_CMD="yum remove -y"
             fi
             ;;
         alpine)
@@ -70,12 +79,16 @@ detect_pkg_manager() {
             INSTALL_CMD="zypper install -y"
             REMOVE_CMD="zypper remove -y"
             ;;
+        void)
+            PKG_MANAGER="xbps"
+            INSTALL_CMD="xbps-install -y"
+            REMOVE_CMD="xbps-remove -y"
+            ;;
         *)
             echo -e "${RED}不支持的Linux发行版: $OS${NC}"
             exit 1
             ;;
     esac
-    
     echo -e "${BLUE}使用包管理器: $PKG_MANAGER${NC}"
 }
 
@@ -84,17 +97,20 @@ auto_cert_path() {
     local domain=$1
     local cert_dir="/etc/nginx/ssl"
     
+    # 创建SSL目录
+    mkdir -p "$cert_dir"
+    
     # 优先检测Let's Encrypt证书
     if [ -d "/etc/letsencrypt/live/$domain" ]; then
         SSL_CERT="/etc/letsencrypt/live/$domain/fullchain.pem"
         SSL_KEY="/etc/letsencrypt/live/$domain/privkey.pem"
         echo -e "${GREEN}使用Let's Encrypt证书: $SSL_CERT${NC}"
-    elif [ -f "$cert_dir/$domain.crt" ]; then
+    elif [ -f "$cert_dir/$domain.crt" ] && [ -f "$cert_dir/$domain.key" ]; then
         SSL_CERT="$cert_dir/$domain.crt"
         SSL_KEY="$cert_dir/$domain.key"
         echo -e "${GREEN}使用已存在的证书: $SSL_CERT${NC}"
     else
-        echo -e "${YELLOW}未找到现有证书，生成自签名证书${NC}"
+        echo -e "${YELLOW}未找到现有证书，生成自签名证书...${NC}"
         generate_selfsigned_cert "$domain"
     fi
 }
@@ -102,46 +118,164 @@ auto_cert_path() {
 # 生成自签名证书
 generate_selfsigned_cert() {
     local domain=$1
-    mkdir -p /etc/nginx/ssl
+    local cert_dir="/etc/nginx/ssl"
     
-    echo -e "${BLUE}生成自签名证书...${NC}"
+    mkdir -p "$cert_dir"
+    
+    echo -e "${BLUE}正在生成自签名证书...${NC}"
     openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-        -keyout /etc/nginx/ssl/$domain.key \
-        -out /etc/nginx/ssl/$domain.crt \
-        -subj "/CN=$domain" 2>/dev/null
-        
-    chmod 600 /etc/nginx/ssl/$domain.key
-    chmod 644 /etc/nginx/ssl/$domain.crt
+        -keyout "$cert_dir/$domain.key" \
+        -out "$cert_dir/$domain.crt" \
+        -subj "/CN=$domain" \
+        -addext "subjectAltName=DNS:$domain"
     
-    SSL_CERT="/etc/nginx/ssl/$domain.crt"
-    SSL_KEY="/etc/nginx/ssl/$domain.key"
+    # 设置正确的权限
+    chmod 600 "$cert_dir/$domain.key"
+    chmod 644 "$cert_dir/$domain.crt"
     
-    echo -e "${GREEN}自签名证书已生成: $SSL_CERT${NC}"
+    SSL_CERT="$cert_dir/$domain.crt"
+    SSL_KEY="$cert_dir/$domain.key"
+    
+    echo -e "${GREEN}自签名证书生成完成:${NC}"
+    echo -e "证书路径: $SSL_CERT"
+    echo -e "私钥路径: $SSL_KEY"
+}
+
+# 安全配置函数
+secure_nginx_config() {
+    local nginx_conf="/etc/nginx/nginx.conf"
+    
+    echo -e "${BLUE}应用Nginx安全配置...${NC}"
+    
+    # 备份配置文件
+    cp "$nginx_conf" "$nginx_conf.bak"
+    
+    # 隐藏服务器版本信息
+    if ! grep -q "server_tokens off" "$nginx_conf"; then
+        sed -i '/http {/a \    server_tokens off;' "$nginx_conf"
+    fi
+    
+    # 禁用目录列表
+    if ! grep -q "autoindex off" "$nginx_conf"; then
+        sed -i '/http {/a \    autoindex off;' "$nginx_conf"
+    fi
+    
+    # 设置安全头
+    if ! grep -q "X-Frame-Options" "$nginx_conf"; then
+        sed -i '/http {/a \    add_header X-Frame-Options "SAMEORIGIN";' "$nginx_conf"
+        sed -i '/http {/a \    add_header X-Content-Type-Options "nosniff";' "$nginx_conf"
+        sed -i '/http {/a \    add_header X-XSS-Protection "1; mode=block";' "$nginx_conf"
+    fi
+    
+    # 设置客户端超时
+    if ! grep -q "client_body_timeout" "$nginx_conf"; then
+        sed -i '/http {/a \    client_body_timeout 10;' "$nginx_conf"
+        sed -i '/http {/a \    client_header_timeout 10;' "$nginx_conf"
+        sed -i '/http {/a \    keepalive_timeout 65;' "$nginx_conf"
+        sed -i '/http {/a \    send_timeout 10;' "$nginx_conf"
+    fi
+    
+    # 限制缓冲区大小
+    if ! grep -q "client_body_buffer_size" "$nginx_conf"; then
+        sed -i '/http {/a \    client_body_buffer_size 1k;' "$nginx_conf"
+        sed -i '/http {/a \    client_header_buffer_size 1k;' "$nginx_conf"
+        sed -i '/http {/a \    client_max_body_size 10m;' "$nginx_conf"
+    fi
+    
+    echo -e "${GREEN}安全配置已应用: 隐藏版本号/禁用目录列表/安全头${NC}"
+}
+
+# 生成安全默认页面
+generate_safe_index() {
+    local index_path="$1"
+    local dir_path=$(dirname "$index_path")
+    
+    # 确保目录存在
+    mkdir -p "$dir_path"
+    
+    cat > "$index_path" <<EOF
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Welcome</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            text-align: center; 
+            padding: 50px; 
+            background-color: #f8f9fa;
+            color: #333;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 30px;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 { 
+            color: #0056b3; 
+            margin-bottom: 20px;
+        }
+        p { 
+            color: #555; 
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Welcome</h1>
+        <p>Server is running normally</p>
+    </div>
+</body>
+</html>
+EOF
+    chmod 644 "$index_path"
+    echo -e "${GREEN}已生成安全默认页面: $index_path${NC}"
 }
 
 # 防火墙配置
 configure_firewall() {
-    echo -e "${BLUE}配置防火墙...${NC}"
+    echo -e "${BLUE}配置防火墙规则...${NC}"
     
+    local fw_configured=0
+    
+    # 检测防火墙类型
     if command -v ufw >/dev/null 2>&1; then
-        ufw allow 'Nginx Full'
-        ufw reload
-        echo -e "${GREEN}UFW防火墙已配置${NC}"
+        echo -e "${BLUE}检测到UFW防火墙${NC}"
+        ufw allow 80/tcp
+        ufw allow 443/tcp
+        # 如果UFW未启用则不重新加载
+        ufw status | grep -q "Status: active" && ufw reload
+        fw_configured=1
     elif command -v firewall-cmd >/dev/null 2>&1; then
-        firewall-cmd --permanent --add-service=http
-        firewall-cmd --permanent --add-service=https
+        echo -e "${BLUE}检测到firewalld防火墙${NC}"
+        firewall-cmd --zone=public --add-service=http --permanent
+        firewall-cmd --zone=public --add-service=https --permanent
         firewall-cmd --reload
-        echo -e "${GREEN}Firewalld防火墙已配置${NC}"
+        fw_configured=1
     elif command -v iptables >/dev/null 2>&1; then
-        iptables -A INPUT -p tcp --dport 80 -j ACCEPT
-        iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+        echo -e "${BLUE}配置iptables规则${NC}"
+        iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+        iptables -I INPUT -p tcp --dport 443 -j ACCEPT
+        # 保存iptables规则
         if command -v iptables-save >/dev/null 2>&1; then
-            mkdir -p /etc/iptables
-            iptables-save > /etc/iptables/iptables.rules
+            if [ -d /etc/iptables ]; then
+                iptables-save > /etc/iptables/rules.v4
+            elif [ -d /etc/sysconfig ]; then
+                iptables-save > /etc/sysconfig/iptables
+            fi
         fi
-        echo -e "${GREEN}iptables防火墙已配置${NC}"
+        fw_configured=1
+    fi
+    
+    if [ $fw_configured -eq 1 ]; then
+        echo -e "${GREEN}防火墙规则已配置, 开放端口: 80, 443${NC}"
     else
-        echo -e "${YELLOW}未检测到防火墙，跳过配置${NC}"
+        echo -e "${YELLOW}未检测到支持的防火墙系统, 请手动配置防火墙规则${NC}"
     fi
 }
 
@@ -149,18 +283,34 @@ configure_firewall() {
 install_nginx() {
     echo -e "${GREEN}开始安装Nginx...${NC}"
     
+    # 安装前检查
+    if command -v nginx >/dev/null 2>&1; then
+        echo -e "${YELLOW}检测到Nginx已安装, 版本: $(nginx -v 2>&1 | cut -d/ -f2)${NC}"
+        read -p "是否继续安装/升级? [y/N]: " confirm
+        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+            echo -e "${BLUE}安装已取消${NC}"
+            return
+        fi
+    fi
+    
+    # 根据不同系统安装Nginx
     case $PKG_MANAGER in
         apt)
             apt update
             apt install -y nginx
             ;;
         yum)
-            if [ "$OS" = "centos" ]; then
+            # 添加EPEL仓库
+            if ! rpm -qa | grep -q epel-release; then
                 yum install -y epel-release
             fi
             yum install -y nginx
             ;;
         dnf)
+            # 添加EPEL仓库
+            if ! rpm -qa | grep -q epel-release; then
+                dnf install -y epel-release
+            fi
             dnf install -y nginx
             ;;
         pacman)
@@ -172,102 +322,147 @@ install_nginx() {
         zypper)
             zypper install -y nginx
             ;;
+        xbps)
+            xbps-install -y nginx
+            ;;
     esac
     
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}Nginx安装成功!${NC}"
-        systemctl start nginx
-        systemctl enable nginx
-        configure_firewall
-        
-        # 创建默认主页
-        echo "<h1>Nginx已成功安装</h1><p>由自动管理脚本部署</p>" > /usr/share/nginx/html/index.html
-    else
+    # 检查安装结果
+    if ! command -v nginx >/dev/null 2>&1; then
         echo -e "${RED}Nginx安装失败!${NC}"
-        exit 1
+        return 1
     fi
+    
+    # 启动Nginx服务
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl enable nginx
+        systemctl start nginx
+    elif command -v service >/dev/null 2>&1; then
+        service nginx start
+        # 添加开机自启
+        if [ -f /etc/init.d/nginx ]; then
+            update-rc.d nginx defaults
+        fi
+    else
+        echo -e "${YELLOW}无法找到systemctl或service命令, 请手动启动Nginx${NC}"
+        nginx
+    fi
+    
+    # 应用安全配置
+    secure_nginx_config
+    
+    # 生成安全默认页面
+    generate_safe_index "/usr/share/nginx/html/index.html"
+    generate_safe_index "/var/www/html/index.html"
+    
+    # 配置防火墙
+    configure_firewall
+    
+    echo -e "${GREEN}Nginx安装完成并应用安全配置${NC}"
+    echo -e "${BLUE}Nginx版本: $(nginx -v 2>&1 | cut -d/ -f2)${NC}"
 }
 
 # Nginx卸载函数
 uninstall_nginx() {
-    echo -e "${YELLOW}确认要卸载Nginx吗? [y/N]: ${NC}"
-    read -r confirm
+    echo -e "${YELLOW}警告: 即将卸载Nginx及其所有配置文件${NC}"
+    read -p "确认卸载? [y/N]: " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${BLUE}卸载已取消${NC}"
+        return
+    fi
     
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        echo -e "${RED}开始卸载Nginx...${NC}"
-        
-        # 停止服务
+    echo -e "${BLUE}停止Nginx服务...${NC}"
+    if command -v systemctl >/dev/null 2>&1; then
         systemctl stop nginx
         systemctl disable nginx
-        
-        # 卸载软件包
-        case $PKG_MANAGER in
-            apt)
-                apt purge -y nginx nginx-common nginx-full
-                apt autoremove -y
-                ;;
-            yum|dnf)
-                $PKG_MANAGER remove -y nginx
-                ;;
-            pacman)
-                pacman -R --noconfirm nginx
-                ;;
-            apk)
-                apk del nginx
-                ;;
-            zypper)
-                zypper remove -y nginx
-                ;;
-        esac
-        
-        # 清理配置文件
-        rm -rf /etc/nginx /var/log/nginx /var/cache/nginx /usr/share/nginx
-        
-        # 重载systemd
-        systemctl daemon-reload
-        
-        echo -e "${GREEN}Nginx已完全卸载${NC}"
+    elif command -v service >/dev/null 2>&1; then
+        service nginx stop
+        # 移除开机自启
+        if [ -f /etc/init.d/nginx ]; then
+            update-rc.d -f nginx remove
+        fi
     else
-        echo -e "${BLUE}已取消卸载操作${NC}"
+        killall nginx 2>/dev/null || true
     fi
+    
+    echo -e "${BLUE}卸载Nginx软件包...${NC}"
+    case $PKG_MANAGER in
+        apt)
+            apt purge -y nginx nginx-common nginx-full nginx-core
+            apt autoremove -y
+            ;;
+        yum|dnf)
+            $PKG_MANAGER remove -y nginx
+            ;;
+        pacman)
+            pacman -Rns --noconfirm nginx
+            ;;
+        apk)
+            apk del nginx
+            ;;
+        zypper)
+            zypper remove -y nginx
+            ;;
+        xbps)
+            xbps-remove -y nginx
+            ;;
+    esac
+    
+    echo -e "${BLUE}删除Nginx配置文件...${NC}"
+    rm -rf /etc/nginx /usr/share/nginx /var/log/nginx /var/cache/nginx
+    
+    echo -e "${BLUE}删除Nginx用户...${NC}"
+    if id -u nginx >/dev/null 2>&1; then
+        userdel -r nginx 2>/dev/null || true
+    fi
+    
+    # 刷新systemd配置
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload
+    fi
+    
+    echo -e "${GREEN}Nginx已完全卸载${NC}"
 }
 
 # HTTPS配置函数
 configure_https() {
-    echo -e "${GREEN}HTTPS配置向导${NC}"
-    read -p "请输入域名: " domain
+    echo -e "${BLUE}配置HTTPS访问...${NC}"
     
+    # 验证Nginx安装
+    if ! command -v nginx >/dev/null 2>&1; then
+        echo -e "${RED}错误: 未检测到Nginx安装, 请先安装Nginx${NC}"
+        return 1
+    fi
+    
+    read -p "请输入域名: " domain
     if [ -z "$domain" ]; then
         echo -e "${RED}错误: 域名不能为空${NC}"
         return 1
     fi
     
-    # 检查Nginx是否安装
-    if ! command -v nginx >/dev/null 2>&1; then
-        echo -e "${RED}错误: Nginx未安装${NC}"
-        return 1
+    # 检查域名格式
+    if ! echo "$domain" | grep -qP '(?=^.{4,253}$)(^(?:[a-zA-Z0-9](?:(?:[a-zA-Z0-9\-]){0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$)'; then
+        echo -e "${YELLOW}警告: 域名格式可能不正确, 继续操作...${NC}"
     fi
     
     # 自动配置证书路径
     auto_cert_path "$domain"
     
-    # 生成Nginx配置
+    # 确定配置目录
     local conf_dir
-    
-    # 检测配置目录
     if [ -d "/etc/nginx/conf.d" ]; then
         conf_dir="/etc/nginx/conf.d"
     elif [ -d "/etc/nginx/sites-available" ]; then
         conf_dir="/etc/nginx/sites-available"
     else
-        mkdir -p /etc/nginx/conf.d
+        mkdir -p "/etc/nginx/conf.d"
         conf_dir="/etc/nginx/conf.d"
     fi
     
+    # 生成Nginx HTTPS配置
     local conf_file="$conf_dir/${domain}.conf"
     
-    echo -e "${BLUE}创建Nginx配置: $conf_file${NC}"
-    
+    echo -e "${BLUE}创建Nginx HTTPS配置: $conf_file${NC}"
     cat > "$conf_file" <<EOF
 server {
     listen 80;
@@ -282,114 +477,219 @@ server {
     ssl_certificate $SSL_CERT;
     ssl_certificate_key $SSL_KEY;
     
+    # SSL配置
     ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
     ssl_prefer_server_ciphers on;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
     ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 1d;
+    ssl_session_timeout 10m;
+    ssl_session_tickets off;
     
     # 安全头设置
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header X-Frame-Options DENY;
+    add_header X-Frame-Options SAMEORIGIN;
     add_header X-Content-Type-Options nosniff;
     add_header X-XSS-Protection "1; mode=block";
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; img-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; frame-src 'none'; object-src 'none'";
+    
+    # 日志设置
+    access_log /var/log/nginx/${domain}_access.log;
+    error_log /var/log/nginx/${domain}_error.log;
+    
+    # 网站根目录
+    root /var/www/$domain;
+    index index.html index.htm;
     
     location / {
-        root /var/www/$domain;
-        index index.html;
+        try_files \$uri \$uri/ =404;
     }
 }
 EOF
-
-    # 创建网站目录
-    echo -e "${BLUE}创建网站目录: /var/www/$domain${NC}"
-    mkdir -p "/var/www/$domain"
-    echo "<h1>$domain 已成功启用HTTPS</h1><p>配置时间: $(date)</p>" > "/var/www/$domain/index.html"
     
-    # 如果使用sites-available目录，创建符号链接到sites-enabled
+    # 创建网站目录和默认页面
+    mkdir -p "/var/www/$domain"
+    generate_safe_index "/var/www/$domain/index.html"
+    
+    # 对于Debian/Ubuntu系统, 创建软链接到sites-enabled
     if [ -d "/etc/nginx/sites-available" ] && [ -d "/etc/nginx/sites-enabled" ]; then
         ln -sf "$conf_file" "/etc/nginx/sites-enabled/$(basename "$conf_file")"
     fi
     
-    # 检查配置并重启Nginx
+    # 检查配置
     echo -e "${BLUE}检查Nginx配置...${NC}"
-    if nginx -t; then
+    nginx -t
+    
+    # 重新加载Nginx
+    echo -e "${BLUE}重新加载Nginx...${NC}"
+    if command -v systemctl >/dev/null 2>&1; then
         systemctl reload nginx
-        echo -e "${GREEN}HTTPS配置已完成，网站已启用${NC}"
-        echo -e "${GREEN}现在可以通过 https://$domain 访问您的网站${NC}"
+    elif command -v service >/dev/null 2>&1; then
+        service nginx reload
     else
-        echo -e "${RED}Nginx配置有误，请检查配置文件${NC}"
-        return 1
+        nginx -s reload
+    fi
+    
+    echo -e "${GREEN}HTTPS配置完成!${NC}"
+    echo -e "${BLUE}网站URL: https://$domain${NC}"
+    echo -e "${BLUE}网站目录: /var/www/$domain${NC}"
+    echo -e "${BLUE}配置文件: $conf_file${NC}"
+    
+    # 证书提醒
+    if [[ "$SSL_CERT" == *"/etc/nginx/ssl/"* ]]; then
+        echo -e "${YELLOW}注意: 当前使用的是自签名证书, 浏览器会显示安全警告${NC}"
+        echo -e "${YELLOW}建议使用Let's Encrypt等服务获取受信任的SSL证书${NC}"
     fi
 }
 
-# 服务管理函数
-restart_nginx() {
-    echo -e "${BLUE}重启Nginx服务...${NC}"
-    systemctl restart nginx
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}Nginx已重启${NC}"
-    else
-        echo -e "${RED}重启Nginx失败${NC}"
-    fi
-}
-
-stop_nginx() {
-    echo -e "${BLUE}停止Nginx服务...${NC}"
-    systemctl stop nginx
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}Nginx已停止${NC}"
-    else
-        echo -e "${RED}停止Nginx失败${NC}"
-    fi
-}
-
-# 信息显示函数
-show_info() {
+# 显示Nginx信息
+show_nginx_info() {
     echo -e "${BLUE}=== Nginx状态信息 ===${NC}"
     
-    # 检查Nginx是否安装
+    # 检查Nginx安装
     if ! command -v nginx >/dev/null 2>&1; then
-        echo -e "${RED}Nginx未安装${NC}"
+        echo -e "${RED}错误: 未检测到Nginx安装${NC}"
         return 1
     fi
     
-    # 获取Nginx版本
-    NGINX_VER=$(nginx -v 2>&1 | cut -d/ -f2)
-    echo -e "${GREEN}Nginx版本: $NGINX_VER${NC}"
+    # 版本信息
+    echo -e "${GREEN}版本信息:${NC}"
+    nginx -v 2>&1
     
-    # 检查Nginx服务状态
-    echo -e "${GREEN}运行状态: $(systemctl is-active nginx)${NC}"
-    echo -e "${GREEN}启动配置: $(systemctl is-enabled nginx)${NC}"
+    # 服务状态
+    echo -e "\n${GREEN}服务状态:${NC}"
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl status nginx --no-pager | head -n 3
+    elif command -v service >/dev/null 2>&1; then
+        service nginx status
+    else
+        ps aux | grep -v grep | grep nginx
+    fi
     
-    # 检查配置文件
-    echo -e "${GREEN}配置文件:${NC}"
-    nginx -T 2>/dev/null | grep -E '^# configuration file' | uniq
+    # 配置文件
+    echo -e "\n${GREEN}配置文件:${NC}"
+    nginx -T 2>/dev/null | grep -E '^# configuration file' | head -n 5
     
-    # 检查端口监听情况
-    echo -e "${GREEN}监听端口:${NC}"
-    ss -tulpn | grep nginx
+    # 监听端口
+    echo -e "\n${GREEN}监听端口:${NC}"
+    if command -v ss >/dev/null 2>&1; then
+        ss -tulpn | grep nginx
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -tulpn | grep nginx
+    else
+        echo "无法获取端口信息 (需要ss或netstat命令)"
+    fi
     
-    # 检查网站目录
-    echo -e "${GREEN}网站目录:${NC}"
-    find /var/www -type d -maxdepth 1 -mindepth 1 2>/dev/null
+    # 网站配置
+    echo -e "\n${GREEN}配置的网站:${NC}"
+    if [ -d "/etc/nginx/conf.d" ]; then
+        ls -la /etc/nginx/conf.d/*.conf 2>/dev/null || echo "无配置文件"
+    fi
     
-    # 检查HTTPS配置
-    echo -e "${GREEN}HTTPS配置:${NC}"
-    find /etc/nginx -name "*.conf" -type f -exec grep -l "ssl_certificate" {} \; | while read -r file; do
-        domain=$(basename "$file" | sed 's/\.conf$//')
-        echo "域名: $domain, 配置文件: $file"
-        grep -E "ssl_certificate|ssl_certificate_key" "$file" | sed 's/;//'
-    done
+    if [ -d "/etc/nginx/sites-enabled" ]; then
+        ls -la /etc/nginx/sites-enabled/* 2>/dev/null || echo "无配置文件"
+    fi
+    
+    # SSL证书
+    echo -e "\n${GREEN}SSL证书:${NC}"
+    if [ -d "/etc/nginx/ssl" ]; then
+        ls -la /etc/nginx/ssl/*.crt 2>/dev/null || echo "无SSL证书"
+    fi
+    if [ -d "/etc/letsencrypt/live" ]; then
+        ls -la /etc/letsencrypt/live/*/cert.pem 2>/dev/null || echo "无Let's Encrypt证书"
+    fi
+    
+    # 日志文件
+    echo -e "\n${GREEN}日志文件:${NC}"
+    ls -la /var/log/nginx/* 2>/dev/null | head -n 5
+    
+    # 配置测试
+    echo -e "\n${GREEN}配置语法检查:${NC}"
+    nginx -t
     
     echo -e "${BLUE}=====================${NC}"
+}
+
+# 启动Nginx
+start_nginx() {
+    echo -e "${BLUE}启动Nginx服务...${NC}"
+    
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl start nginx
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}Nginx启动成功${NC}"
+        else
+            echo -e "${RED}Nginx启动失败${NC}"
+            return 1
+        fi
+    elif command -v service >/dev/null 2>&1; then
+        service nginx start
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}Nginx启动成功${NC}"
+        else
+            echo -e "${RED}Nginx启动失败${NC}"
+            return 1
+        fi
+    else
+        nginx
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}Nginx启动成功${NC}"
+        else
+            echo -e "${RED}Nginx启动失败${NC}"
+            return 1
+        fi
+    fi
+}
+
+# 停止Nginx
+stop_nginx() {
+    echo -e "${BLUE}停止Nginx服务...${NC}"
+    
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl stop nginx
+    elif command -v service >/dev/null 2>&1; then
+        service nginx stop
+    else
+        nginx -s stop
+    fi
+    
+    # 验证是否停止
+    if pgrep -x "nginx" >/dev/null; then
+        echo -e "${RED}Nginx未能完全停止, 尝试强制终止...${NC}"
+        killall -9 nginx 2>/dev/null || true
+    fi
+    
+    echo -e "${GREEN}Nginx已停止${NC}"
+}
+
+# 重启Nginx
+restart_nginx() {
+    echo -e "${BLUE}重启Nginx服务...${NC}"
+    
+    # 先检查配置语法
+    echo -e "${BLUE}检查配置语法...${NC}"
+    if ! nginx -t; then
+        echo -e "${RED}配置有错误, 请修复后再重启${NC}"
+        return 1
+    fi
+    
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl restart nginx
+    elif command -v service >/dev/null 2>&1; then
+        service nginx restart
+    else
+        nginx -s stop
+        sleep 1
+        nginx
+    fi
+    
+    echo -e "${GREEN}Nginx已重启${NC}"
 }
 
 # 主菜单
 main_menu() {
     clear
     echo -e "${GREEN}===================================${NC}"
-    echo -e "${GREEN}=== Nginx一键管理脚本 v2.0 ===${NC}"
+    echo -e "${GREEN}=== Nginx安全管理脚本 v3.0 ===${NC}"
     echo -e "${GREEN}===================================${NC}"
     echo -e "${BLUE}1. 安装Nginx${NC}"
     echo -e "${BLUE}2. 卸载Nginx${NC}"
@@ -402,38 +702,30 @@ main_menu() {
     echo -n -e "${YELLOW}请输入选择: ${NC}"
 }
 
-# 检查root权限
-check_root() {
-    if [ "$(id -u)" -ne 0 ]; then
-        echo -e "${RED}错误: 请使用root权限运行脚本${NC}"
-        exit 1
-    fi
+# 主函数
+main() {
+    check_root
+    detect_system
+    detect_pkg_manager
+    
+    while true; do
+        main_menu
+        read choice
+        case $choice in
+            1) install_nginx ;;
+            2) uninstall_nginx ;;
+            3) restart_nginx ;;
+            4) stop_nginx ;;
+            5) configure_https ;;
+            6) show_nginx_info ;;
+            0) echo -e "${BLUE}退出系统${NC}"; break ;;
+            *) echo -e "${RED}无效选项!${NC}" ;;
+        esac
+        echo
+        read -n 1 -s -r -p "按任意键继续..."
+        echo
+    done
 }
 
-# 主逻辑
-check_root
-detect_system
-detect_pkg_manager
-
-while true; do
-    main_menu
-    read -r choice
-    
-    case $choice in
-        1) install_nginx ;;
-        2) uninstall_nginx ;;
-        3) restart_nginx ;;
-        4) stop_nginx ;;
-        5) configure_https ;;
-        6) show_info ;;
-        0) 
-           echo -e "${BLUE}感谢使用Nginx一键管理脚本，再见！${NC}"
-           exit 0 
-           ;;
-        *) echo -e "${RED}无效选项，请重新选择!${NC}" ;;
-    esac
-    
-    echo
-    read -n 1 -s -r -p "按任意键继续..."
-    echo
-done
+# 执行主函数
+main
