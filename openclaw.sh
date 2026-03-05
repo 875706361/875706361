@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# OpenClaw 自动化部署与管理脚本 (终极 Root 修复版)
+# OpenClaw 自动化部署与管理脚本 (全局重定向降维打击版)
 # ==========================================
 
 # 颜色输出格式
@@ -20,16 +20,6 @@ fi
 load_nvm() {
     export NVM_DIR="$HOME/.nvm"
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-}
-
-# 核心修复：为当前 Shell 环境配置 Root 的用户级 Systemd 实例
-setup_root_systemd() {
-    export XDG_RUNTIME_DIR=/run/user/0
-    export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/0/bus"
-    mkdir -p $XDG_RUNTIME_DIR
-    chmod 700 $XDG_RUNTIME_DIR
-    loginctl enable-linger root
-    systemctl start user@0.service 2>/dev/null
 }
 
 # 1. 设置 Swap 交换空间 (物理内存的两倍)
@@ -60,13 +50,13 @@ setup_swap() {
 
 # 安装前置软件
 install_prereqs() {
-    echo -e "${YELLOW}正在检测系统基础依赖 (curl, systemd, dbus)...${NC}"
+    echo -e "${YELLOW}正在检测系统基础依赖...${NC}"
     if command -v apt-get >/dev/null; then
-        apt-get update -y && apt-get DEBIAN_FRONTEND=noninteractive install -y curl systemd dbus-user-session
+        apt-get update -y && apt-get DEBIAN_FRONTEND=noninteractive install -y curl systemd
     elif command -v yum >/dev/null; then
-        yum install -y curl systemd dbus
+        yum install -y curl systemd
     elif command -v dnf >/dev/null; then
-        dnf install -y curl systemd dbus
+        dnf install -y curl systemd
     else
         echo -e "${RED}未知的包管理器。请手动安装 curl 和 systemd。${NC}"
     fi
@@ -93,7 +83,7 @@ install_openclaw() {
     echo -e "${GREEN}OpenClaw 安装完成！可以继续执行选项 3 运行向导。${NC}"
 }
 
-# 3. 运行向导并自动修复 Systemd (终极拦截器版)
+# 3. 运行向导 (偷梁换柱：将 User 服务强制转换为 System 全局服务)
 run_wizard_and_patch() {
     load_nvm
     if ! command -v openclaw >/dev/null; then
@@ -101,45 +91,42 @@ run_wizard_and_patch() {
         return
     fi
     
-    echo -e "${YELLOW}\n>>> 准备环境: 创建 systemctl 拦截器以强制注入 DBus 环境...${NC}"
-    setup_root_systemd
+    echo -e "${YELLOW}\n>>> 准备环境: 正在施展魔法，重定向 Systemd 目录...${NC}"
+    # 魔法1：将用户配置目录软链接到全局目录
+    mkdir -p /root/.config/systemd
+    if [ -d /root/.config/systemd/user ] && [ ! -L /root/.config/systemd/user ]; then
+        mv /root/.config/systemd/user /root/.config/systemd/user.bak
+    fi
+    ln -sf /etc/systemd/system /root/.config/systemd/user
     
-    # 核心黑科技：创建一个假的 systemctl 来拦截 Node.js 的系统调用
+    # 魔法2：创建一个假的 systemctl，在半空中拦截并删除 "--user" 参数
     mkdir -p /tmp/openclaw_fix
     cat << 'EOF' > /tmp/openclaw_fix/systemctl
 #!/bin/bash
-# 强制注入 Root 用户的 D-Bus 环境变量，防止 Node.js 子进程丢失
-export XDG_RUNTIME_DIR=/run/user/0
-export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/0/bus"
-# 将原本的参数传递给真正的 systemctl
-exec /bin/systemctl "$@"
+NEW_ARGS=()
+for arg in "$@"; do
+    if [ "$arg" != "--user" ]; then
+        NEW_ARGS+=("$arg")
+    fi
+done
+exec /bin/systemctl "${NEW_ARGS[@]}"
 EOF
     chmod +x /tmp/openclaw_fix/systemctl
-    
-    # 将拦截器目录放在 PATH 的最前面，让 OpenClaw 优先调用它
     export PATH="/tmp/openclaw_fix:$PATH"
     
     echo -e "${YELLOW}\n>>> 第一步: 启动 OpenClaw 向导及守护进程...${NC}"
-    # 注入内存突破参数，防止 OOM 报错
     export NODE_OPTIONS="--max-old-space-size=4096"
     openclaw onboard --install-daemon
     
-    # 运行完毕后，清理拦截器，恢复系统环境变量
+    # 运行完毕后，清理战场，恢复真实环境
     export PATH=$(echo $PATH | sed 's|/tmp/openclaw_fix:||')
     rm -rf /tmp/openclaw_fix
     
-    echo -e "${YELLOW}\n>>> 第二步: 自动为 Systemd (Root用户级) 注入内存补丁...${NC}"
+    echo -e "${YELLOW}\n>>> 第二步: 自动为全局 Systemd 注入内存补丁...${NC}"
     
-    # 重新声明当前环境的变量，以防拦截器清理后环境失效
-    setup_root_systemd
-
-    SERVICE_NAME=$(systemctl --user list-units --all --type=service | grep -o 'openclaw.*\.service' | head -n 1)
-    
-    if [ -z "$SERVICE_NAME" ]; then
-        SERVICE_NAME="openclaw-gateway.service"
-    fi
-
-    SERVICE_DIR="$HOME/.config/systemd/user/${SERVICE_NAME}.d"
+    # 因为已经重定向到全局，所以我们直接操作全局服务
+    SERVICE_NAME="openclaw-gateway.service"
+    SERVICE_DIR="/etc/systemd/system/${SERVICE_NAME}.d"
     mkdir -p "$SERVICE_DIR"
 
     cat <<EOF > "$SERVICE_DIR/override.conf"
@@ -147,54 +134,51 @@ EOF
 Environment="NODE_OPTIONS=--max-old-space-size=4096"
 EOF
 
-    systemctl --user daemon-reload
-    systemctl --user restart "$SERVICE_NAME" 2>/dev/null || echo -e "${YELLOW}服务启动中，请稍后通过选项 4 检查状态。${NC}"
+    systemctl daemon-reload
+    systemctl restart "$SERVICE_NAME" 2>/dev/null || echo -e "${YELLOW}服务启动中，请稍后通过选项 4 检查状态。${NC}"
     
     echo -e "${GREEN}===================================================${NC}"
-    echo -e "${GREEN}🎉 向导执行完毕！通过拦截器成功绕过了环境限制。${NC}"
-    echo -e "${GREEN}后台服务 ($SERVICE_NAME) 现在拥有 4GB 的专属内存上限。${NC}"
+    echo -e "${GREEN}🎉 恭喜！通过降维打击，已成功绕过系统的环境限制！${NC}"
+    echo -e "${GREEN}OpenClaw 现在作为一个稳如泰山的【全局守护进程】运行，${NC}"
+    echo -e "${GREEN}并且拥有 4GB 的专属内存上限。${NC}"
     echo -e "${GREEN}===================================================${NC}"
 }
 
-# 4. 查看运行状态
+# 4. 查看运行状态 (已转为查询全局服务)
 check_status() {
-    setup_root_systemd
     echo -e "${YELLOW}查询 OpenClaw 守护进程状态...${NC}"
     
-    SERVICE_NAME=$(systemctl --user list-units --all --type=service | grep -o 'openclaw.*\.service' | head -n 1)
-    if [ -z "$SERVICE_NAME" ]; then
-        SERVICE_NAME="openclaw-gateway.service"
-    fi
+    SERVICE_NAME="openclaw-gateway.service"
 
-    if systemctl --user list-units --all --type=service | grep -q "$SERVICE_NAME"; then
-        systemctl --user status "$SERVICE_NAME"
+    if systemctl list-units --all --type=service | grep -q "$SERVICE_NAME"; then
+        systemctl status "$SERVICE_NAME"
     else
         echo -e "${RED}未发现 $SERVICE_NAME 运行。可能尚未完成向导配置。${NC}"
     fi
 }
 
-# 5. 卸载 OpenClaw
+# 5. 卸载 OpenClaw (已转为清理全局服务)
 uninstall_openclaw() {
-    setup_root_systemd
     echo -e "${YELLOW}正在卸载 OpenClaw 及服务...${NC}"
     
-    SERVICE_NAME=$(systemctl --user list-units --all --type=service | grep -o 'openclaw.*\.service' | head -n 1)
-    if [ -z "$SERVICE_NAME" ]; then
-        SERVICE_NAME="openclaw-gateway.service"
-    fi
+    SERVICE_NAME="openclaw-gateway.service"
 
-    if systemctl --user list-units --all --type=service | grep -q "$SERVICE_NAME"; then
-        systemctl --user stop "$SERVICE_NAME"
-        systemctl --user disable "$SERVICE_NAME"
-        rm -f "$HOME/.config/systemd/user/$SERVICE_NAME"
-        rm -rf "$HOME/.config/systemd/user/${SERVICE_NAME}.d" 
-        systemctl --user daemon-reload
+    if systemctl list-units --all --type=service | grep -q "$SERVICE_NAME"; then
+        systemctl stop "$SERVICE_NAME"
+        systemctl disable "$SERVICE_NAME"
+        rm -f "/etc/systemd/system/$SERVICE_NAME"
+        rm -rf "/etc/systemd/system/${SERVICE_NAME}.d" 
+        systemctl daemon-reload
     fi
     
     load_nvm
     if command -v npm >/dev/null; then
         npm uninstall -g openclaw
     fi
+    
+    # 清理刚才建的软链接
+    rm -f /root/.config/systemd/user
+    
     echo -e "${GREEN}OpenClaw 已完全卸载。${NC}"
 }
 
@@ -203,11 +187,11 @@ uninstall_openclaw() {
 # ==========================================
 while true; do
     echo -e "\n${GREEN}=====================================${NC}"
-    echo -e "${YELLOW}   🦞 OpenClaw Root 终极管理脚本 🦞   ${NC}"
+    echo -e "${YELLOW}   🦞 OpenClaw 全局管理脚本 (降维版) 🦞   ${NC}"
     echo -e "${GREEN}=====================================${NC}"
     echo "1. 配置 Swap 并安装前置软件 (NVM, Node 22)"
     echo "2. 安装 OpenClaw 最新版"
-    echo "3. 运行 OpenClaw 初始向导 (拦截器强制修复版)"
+    echo "3. 运行 OpenClaw 初始向导 (强制转换为全局服务)"
     echo "4. 查看 OpenClaw 运行状态"
     echo "5. 彻底卸载 OpenClaw"
     echo "0. 退出脚本"
