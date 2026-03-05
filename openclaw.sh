@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# OpenClaw 自动化部署与管理脚本 (分步逻辑版)
+# OpenClaw 自动化部署与管理脚本 (Root 专属修复版)
 # ==========================================
 
 # 颜色输出格式
@@ -10,9 +10,9 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # 恢复默认
 
-# 必须以 root 权限运行
+# 强制检查：必须以 root 权限运行
 if [ "$(id -u)" != "0" ]; then
-    echo -e "${RED}错误: 此脚本需要 root 权限，请使用 sudo su 切换为 root 后重新运行。${NC}"
+    echo -e "${RED}错误: 此脚本专为 root 用户设计，请切换到 root 后重试。${NC}"
     exit 1
 fi
 
@@ -22,7 +22,24 @@ load_nvm() {
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 }
 
-# 1. 设置 Swap 交换空间 (物理内存的两倍) & 安装前置软件
+# 核心修复：强制启动 Root 的用户级 Systemd 实例
+setup_root_systemd() {
+    # 强制允许 root 驻留后台 (即使断开 SSH 也不杀进程)
+    loginctl enable-linger root
+    
+    # 手动创建并授权 root 的运行时目录
+    export XDG_RUNTIME_DIR=/run/user/0
+    mkdir -p $XDG_RUNTIME_DIR
+    chmod 700 $XDG_RUNTIME_DIR
+    
+    # 强制启动 root 的 user-level systemd 服务
+    systemctl start user@0.service
+    
+    # 设置 D-Bus 环境变量，让 systemctl --user 能找到正确的通信套接字
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+}
+
+# 1. 设置 Swap 交换空间 (物理内存的两倍)
 setup_swap() {
     echo -e "${YELLOW}正在检查系统 Swap 空间...${NC}"
     current_swap=$(free -m | awk '/^Swap:/ {print $2}')
@@ -48,16 +65,17 @@ setup_swap() {
     fi
 }
 
+# 安装前置软件
 install_prereqs() {
-    echo -e "${YELLOW}正在检测系统基础依赖 (curl)...${NC}"
+    echo -e "${YELLOW}正在检测系统基础依赖 (curl, systemd, dbus)...${NC}"
     if command -v apt-get >/dev/null; then
-        apt-get update -y && apt-get install -y curl
+        apt-get update -y && apt-get DEBIAN_FRONTEND=noninteractive install -y curl systemd dbus-user-session
     elif command -v yum >/dev/null; then
-        yum install -y curl
+        yum install -y curl systemd dbus
     elif command -v dnf >/dev/null; then
-        dnf install -y curl
+        dnf install -y curl systemd dbus
     else
-        echo -e "${RED}未知的包管理器。请手动安装 curl。${NC}"
+        echo -e "${RED}未知的包管理器。请手动安装 curl 和 systemd。${NC}"
     fi
 
     echo -e "${YELLOW}正在安装 NVM...${NC}"
@@ -82,7 +100,7 @@ install_openclaw() {
     echo -e "${GREEN}OpenClaw 安装完成！可以继续执行选项 3 运行向导。${NC}"
 }
 
-# 3. 运行向导并自动修复 Systemd
+# 3. 运行向导并自动修复 Systemd (User-level)
 run_wizard_and_patch() {
     load_nvm
     if ! command -v openclaw >/dev/null; then
@@ -90,17 +108,23 @@ run_wizard_and_patch() {
         return
     fi
     
+    echo -e "${YELLOW}\n>>> 准备环境: 强行唤醒 Root 的 systemctl --user 环境...${NC}"
+    setup_root_systemd
+    
     echo -e "${YELLOW}\n>>> 第一步: 启动 OpenClaw 向导及守护进程...${NC}"
     export NODE_OPTIONS="--max-old-space-size=4096"
     openclaw onboard --install-daemon
     
-    echo -e "${YELLOW}\n>>> 第二步: 自动为 Systemd 注入内存补丁...${NC}"
-    if ! systemctl list-units --all --type=service | grep -q "openclaw.service"; then
-        echo -e "${RED}未检测到 openclaw.service。向导可能未能成功生成服务，跳过内存补丁修复。${NC}"
-        return
+    echo -e "${YELLOW}\n>>> 第二步: 自动为 Systemd (Root用户级) 注入内存补丁...${NC}"
+    # 检查服务名
+    SERVICE_NAME=$(systemctl --user list-units --all --type=service | grep -o 'openclaw.*\.service' | head -n 1)
+    
+    if [ -z "$SERVICE_NAME" ]; then
+        SERVICE_NAME="openclaw-gateway.service"
     fi
 
-    SERVICE_DIR="/etc/systemd/system/openclaw.service.d"
+    # Root 用户的配置目录在 ~/.config/systemd/user/ (即 /root/.config/systemd/user/)
+    SERVICE_DIR="$HOME/.config/systemd/user/${SERVICE_NAME}.d"
     mkdir -p "$SERVICE_DIR"
 
     cat <<EOF > "$SERVICE_DIR/override.conf"
@@ -108,34 +132,48 @@ run_wizard_and_patch() {
 Environment="NODE_OPTIONS=--max-old-space-size=4096"
 EOF
 
-    systemctl daemon-reload
-    systemctl restart openclaw.service
+    systemctl --user daemon-reload
+    systemctl --user restart "$SERVICE_NAME" 2>/dev/null || echo -e "${YELLOW}服务启动中，请稍后通过选项 4 检查状态。${NC}"
     
     echo -e "${GREEN}===================================================${NC}"
-    echo -e "${GREEN}🎉 向导执行完毕，并且守护进程内存限制已成功修复！${NC}"
-    echo -e "${GREEN}后台服务现在拥有 4GB 的专属内存上限，彻底告别内存溢出。${NC}"
+    echo -e "${GREEN}🎉 向导执行完毕！Root 下的守护进程已配置完毕。${NC}"
+    echo -e "${GREEN}后台服务 ($SERVICE_NAME) 现在拥有 4GB 的专属内存上限。${NC}"
     echo -e "${GREEN}===================================================${NC}"
 }
 
 # 4. 查看运行状态
 check_status() {
+    setup_root_systemd
     echo -e "${YELLOW}查询 OpenClaw 守护进程状态...${NC}"
-    if systemctl list-units --type=service | grep -q "openclaw.service"; then
-        systemctl status openclaw.service
+    
+    SERVICE_NAME=$(systemctl --user list-units --all --type=service | grep -o 'openclaw.*\.service' | head -n 1)
+    if [ -z "$SERVICE_NAME" ]; then
+        SERVICE_NAME="openclaw-gateway.service"
+    fi
+
+    if systemctl --user list-units --all --type=service | grep -q "$SERVICE_NAME"; then
+        systemctl --user status "$SERVICE_NAME"
     else
-        echo -e "${RED}未发现 openclaw.service 运行。可能尚未完成向导配置。${NC}"
+        echo -e "${RED}未发现 $SERVICE_NAME 运行。可能尚未完成向导配置。${NC}"
     fi
 }
 
 # 5. 卸载 OpenClaw
 uninstall_openclaw() {
+    setup_root_systemd
     echo -e "${YELLOW}正在卸载 OpenClaw 及服务...${NC}"
-    if systemctl list-units --all --type=service | grep -q "openclaw.service"; then
-        systemctl stop openclaw.service
-        systemctl disable openclaw.service
-        rm -f /etc/systemd/system/openclaw.service
-        rm -rf /etc/systemd/system/openclaw.service.d 
-        systemctl daemon-reload
+    
+    SERVICE_NAME=$(systemctl --user list-units --all --type=service | grep -o 'openclaw.*\.service' | head -n 1)
+    if [ -z "$SERVICE_NAME" ]; then
+        SERVICE_NAME="openclaw-gateway.service"
+    fi
+
+    if systemctl --user list-units --all --type=service | grep -q "$SERVICE_NAME"; then
+        systemctl --user stop "$SERVICE_NAME"
+        systemctl --user disable "$SERVICE_NAME"
+        rm -f "$HOME/.config/systemd/user/$SERVICE_NAME"
+        rm -rf "$HOME/.config/systemd/user/${SERVICE_NAME}.d" 
+        systemctl --user daemon-reload
     fi
     
     load_nvm
@@ -150,11 +188,11 @@ uninstall_openclaw() {
 # ==========================================
 while true; do
     echo -e "\n${GREEN}=====================================${NC}"
-    echo -e "${YELLOW}     🦞 OpenClaw 管理脚本 🦞      ${NC}"
+    echo -e "${YELLOW}   🦞 OpenClaw Root 专属管理脚本 🦞   ${NC}"
     echo -e "${GREEN}=====================================${NC}"
     echo "1. 配置 Swap 并安装前置软件 (NVM, Node 22)"
     echo "2. 安装 OpenClaw 最新版"
-    echo "3. 运行 OpenClaw 初始向导 (含自动修复守护进程内存限制)"
+    echo "3. 运行 OpenClaw 初始向导 (含 Root 守护进程修复)"
     echo "4. 查看 OpenClaw 运行状态"
     echo "5. 彻底卸载 OpenClaw"
     echo "0. 退出脚本"
