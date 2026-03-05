@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# OpenClaw 自动化部署与管理脚本 (Root 专属修复版)
+# OpenClaw 自动化部署与管理脚本 (终极 Root 修复版)
 # ==========================================
 
 # 颜色输出格式
@@ -22,21 +22,14 @@ load_nvm() {
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 }
 
-# 核心修复：强制启动 Root 的用户级 Systemd 实例
+# 核心修复：为当前 Shell 环境配置 Root 的用户级 Systemd 实例
 setup_root_systemd() {
-    # 强制允许 root 驻留后台 (即使断开 SSH 也不杀进程)
-    loginctl enable-linger root
-    
-    # 手动创建并授权 root 的运行时目录
     export XDG_RUNTIME_DIR=/run/user/0
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/0/bus"
     mkdir -p $XDG_RUNTIME_DIR
     chmod 700 $XDG_RUNTIME_DIR
-    
-    # 强制启动 root 的 user-level systemd 服务
-    systemctl start user@0.service
-    
-    # 设置 D-Bus 环境变量，让 systemctl --user 能找到正确的通信套接字
-    export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+    loginctl enable-linger root
+    systemctl start user@0.service 2>/dev/null
 }
 
 # 1. 设置 Swap 交换空间 (物理内存的两倍)
@@ -100,7 +93,7 @@ install_openclaw() {
     echo -e "${GREEN}OpenClaw 安装完成！可以继续执行选项 3 运行向导。${NC}"
 }
 
-# 3. 运行向导并自动修复 Systemd (User-level)
+# 3. 运行向导并自动修复 Systemd (终极拦截器版)
 run_wizard_and_patch() {
     load_nvm
     if ! command -v openclaw >/dev/null; then
@@ -108,22 +101,44 @@ run_wizard_and_patch() {
         return
     fi
     
-    echo -e "${YELLOW}\n>>> 准备环境: 强行唤醒 Root 的 systemctl --user 环境...${NC}"
+    echo -e "${YELLOW}\n>>> 准备环境: 创建 systemctl 拦截器以强制注入 DBus 环境...${NC}"
     setup_root_systemd
     
+    # 核心黑科技：创建一个假的 systemctl 来拦截 Node.js 的系统调用
+    mkdir -p /tmp/openclaw_fix
+    cat << 'EOF' > /tmp/openclaw_fix/systemctl
+#!/bin/bash
+# 强制注入 Root 用户的 D-Bus 环境变量，防止 Node.js 子进程丢失
+export XDG_RUNTIME_DIR=/run/user/0
+export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/0/bus"
+# 将原本的参数传递给真正的 systemctl
+exec /bin/systemctl "$@"
+EOF
+    chmod +x /tmp/openclaw_fix/systemctl
+    
+    # 将拦截器目录放在 PATH 的最前面，让 OpenClaw 优先调用它
+    export PATH="/tmp/openclaw_fix:$PATH"
+    
     echo -e "${YELLOW}\n>>> 第一步: 启动 OpenClaw 向导及守护进程...${NC}"
+    # 注入内存突破参数，防止 OOM 报错
     export NODE_OPTIONS="--max-old-space-size=4096"
     openclaw onboard --install-daemon
     
+    # 运行完毕后，清理拦截器，恢复系统环境变量
+    export PATH=$(echo $PATH | sed 's|/tmp/openclaw_fix:||')
+    rm -rf /tmp/openclaw_fix
+    
     echo -e "${YELLOW}\n>>> 第二步: 自动为 Systemd (Root用户级) 注入内存补丁...${NC}"
-    # 检查服务名
+    
+    # 重新声明当前环境的变量，以防拦截器清理后环境失效
+    setup_root_systemd
+
     SERVICE_NAME=$(systemctl --user list-units --all --type=service | grep -o 'openclaw.*\.service' | head -n 1)
     
     if [ -z "$SERVICE_NAME" ]; then
         SERVICE_NAME="openclaw-gateway.service"
     fi
 
-    # Root 用户的配置目录在 ~/.config/systemd/user/ (即 /root/.config/systemd/user/)
     SERVICE_DIR="$HOME/.config/systemd/user/${SERVICE_NAME}.d"
     mkdir -p "$SERVICE_DIR"
 
@@ -136,7 +151,7 @@ EOF
     systemctl --user restart "$SERVICE_NAME" 2>/dev/null || echo -e "${YELLOW}服务启动中，请稍后通过选项 4 检查状态。${NC}"
     
     echo -e "${GREEN}===================================================${NC}"
-    echo -e "${GREEN}🎉 向导执行完毕！Root 下的守护进程已配置完毕。${NC}"
+    echo -e "${GREEN}🎉 向导执行完毕！通过拦截器成功绕过了环境限制。${NC}"
     echo -e "${GREEN}后台服务 ($SERVICE_NAME) 现在拥有 4GB 的专属内存上限。${NC}"
     echo -e "${GREEN}===================================================${NC}"
 }
@@ -188,11 +203,11 @@ uninstall_openclaw() {
 # ==========================================
 while true; do
     echo -e "\n${GREEN}=====================================${NC}"
-    echo -e "${YELLOW}   🦞 OpenClaw Root 专属管理脚本 🦞   ${NC}"
+    echo -e "${YELLOW}   🦞 OpenClaw Root 终极管理脚本 🦞   ${NC}"
     echo -e "${GREEN}=====================================${NC}"
     echo "1. 配置 Swap 并安装前置软件 (NVM, Node 22)"
     echo "2. 安装 OpenClaw 最新版"
-    echo "3. 运行 OpenClaw 初始向导 (含 Root 守护进程修复)"
+    echo "3. 运行 OpenClaw 初始向导 (拦截器强制修复版)"
     echo "4. 查看 OpenClaw 运行状态"
     echo "5. 彻底卸载 OpenClaw"
     echo "0. 退出脚本"
