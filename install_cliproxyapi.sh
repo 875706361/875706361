@@ -53,6 +53,12 @@ TLS_KEY=""
 ENABLE_SERVICE="true"
 START_NOW="true"
 
+DISTRO_ID="unknown"
+DISTRO_LIKE=""
+PKG_MANAGER="unknown"
+INIT_SYSTEM="unknown"
+SERVICE_SUPPORTED="false"
+
 STEP_NO=0
 
 info() { echo -e "${BLUE}[信息]${RESET} $*"; }
@@ -88,8 +94,8 @@ show_warn_box() {
 show_banner() {
   clear 2>/dev/null || true
   echo -e "${CYAN}${BOLD}╔══════════════════════════════════════════════╗${RESET}"
-  echo -e "${CYAN}${BOLD}║         CLIProxyAPI 中文管理脚本            ║${RESET}"
-  echo -e "${CYAN}${BOLD}║      安装 / 更新 / 重启 / 卸载 / 查看       ║${RESET}"
+  echo -e "${CYAN}${BOLD}║      CLIProxyAPI 通用 Linux 管理脚本        ║${RESET}"
+  echo -e "${CYAN}${BOLD}║    安装 / 更新 / 服务管理 / 日志 / 卸载     ║${RESET}"
   echo -e "${CYAN}${BOLD}╚══════════════════════════════════════════════╝${RESET}"
   echo -e "${DIM}项目: ${PROJECT_NAME}    默认服务名: ${DEFAULT_SERVICE_NAME}${RESET}"
   line
@@ -106,6 +112,58 @@ require_root() {
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
+}
+
+detect_distro() {
+  if [[ -f /etc/os-release ]]; then
+    DISTRO_ID="$(. /etc/os-release; printf '%s' "${ID:-unknown}")"
+    DISTRO_LIKE="$(. /etc/os-release; printf '%s' "${ID_LIKE:-}")"
+  else
+    DISTRO_ID="unknown"
+    DISTRO_LIKE=""
+  fi
+}
+
+detect_pkg_manager() {
+  if command_exists apt-get; then
+    PKG_MANAGER="apt"
+  elif command_exists dnf; then
+    PKG_MANAGER="dnf"
+  elif command_exists yum; then
+    PKG_MANAGER="yum"
+  elif command_exists zypper; then
+    PKG_MANAGER="zypper"
+  elif command_exists apk; then
+    PKG_MANAGER="apk"
+  elif command_exists pacman; then
+    PKG_MANAGER="pacman"
+  else
+    PKG_MANAGER="unknown"
+  fi
+}
+
+detect_init_system() {
+  if command_exists systemctl && [[ -d /run/systemd/system || "$(ps -p 1 -o comm= 2>/dev/null || true)" == "systemd" ]]; then
+    INIT_SYSTEM="systemd"
+    SERVICE_SUPPORTED="true"
+  elif command_exists rc-service || [[ -d /run/openrc ]]; then
+    INIT_SYSTEM="openrc"
+    SERVICE_SUPPORTED="false"
+  else
+    INIT_SYSTEM="unknown"
+    SERVICE_SUPPORTED="false"
+  fi
+}
+
+show_platform_info() {
+  detect_distro
+  detect_pkg_manager
+  detect_init_system
+  show_box "系统环境检测" \
+    "发行版：${DISTRO_ID}${DISTRO_LIKE:+ (like: ${DISTRO_LIKE})}" \
+    "包管理器：${PKG_MANAGER}" \
+    "Init 系统：${INIT_SYSTEM}" \
+    "是否支持 systemd 服务：${SERVICE_SUPPORTED}"
 }
 
 prompt() {
@@ -171,27 +229,45 @@ version_ge() {
 }
 
 install_packages() {
-  local pkgs=(curl git tar sed awk grep coreutils ca-certificates jq)
+  detect_pkg_manager
+  local pkgs=()
 
-  if command_exists apt-get; then
-    info "使用 apt 安装依赖..."
-    apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkgs[@]}"
-  elif command_exists dnf; then
-    info "使用 dnf 安装依赖..."
-    dnf install -y "${pkgs[@]}"
-  elif command_exists yum; then
-    info "使用 yum 安装依赖..."
-    yum install -y "${pkgs[@]}"
-  elif command_exists zypper; then
-    info "使用 zypper 安装依赖..."
-    zypper --non-interactive install "${pkgs[@]}"
-  elif command_exists apk; then
-    info "使用 apk 安装依赖..."
-    apk add --no-cache "${pkgs[@]}"
-  else
-    warn "未识别到包管理器，请手动确保已安装：${pkgs[*]}"
-  fi
+  case "$PKG_MANAGER" in
+    apt)
+      pkgs=(curl git tar sed gawk grep coreutils ca-certificates jq unzip)
+      info "使用 apt 安装依赖..."
+      apt-get update
+      DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkgs[@]}"
+      ;;
+    dnf)
+      pkgs=(curl git tar sed gawk grep coreutils ca-certificates jq unzip)
+      info "使用 dnf 安装依赖..."
+      dnf install -y "${pkgs[@]}"
+      ;;
+    yum)
+      pkgs=(curl git tar sed gawk grep coreutils ca-certificates jq unzip)
+      info "使用 yum 安装依赖..."
+      yum install -y "${pkgs[@]}"
+      ;;
+    zypper)
+      pkgs=(curl git tar sed gawk grep coreutils ca-certificates jq unzip)
+      info "使用 zypper 安装依赖..."
+      zypper --non-interactive install "${pkgs[@]}"
+      ;;
+    apk)
+      pkgs=(curl git tar sed gawk grep coreutils ca-certificates jq unzip)
+      info "使用 apk 安装依赖..."
+      apk add --no-cache "${pkgs[@]}"
+      ;;
+    pacman)
+      pkgs=(curl git tar sed gawk grep coreutils ca-certificates jq unzip)
+      info "使用 pacman 安装依赖..."
+      pacman -Sy --noconfirm "${pkgs[@]}"
+      ;;
+    *)
+      warn "未识别到包管理器，请手动确保已安装：curl git tar sed awk grep ca-certificates jq"
+      ;;
+  esac
 }
 
 ensure_go() {
@@ -296,6 +372,7 @@ resolve_release_asset() {
 collect_install_settings() {
   reset_steps
   headline "收集安装参数"
+  show_platform_info
   show_box "安装向导" \
     "接下来会引导你完成 CLIProxyAPI 安装。" \
     "建议优先选择本机监听，确认稳定后再开放公网访问。"
@@ -342,9 +419,16 @@ collect_install_settings() {
     TLS_KEY="$(prompt 'TLS 私钥路径' '/etc/ssl/private/cliproxyapi.key')"
   fi
 
-  ENABLE_SERVICE="true"
-  START_NOW="true"
-  info "将默认创建 systemd 服务、设置开机自启，并在安装完成后立即启动。"
+  detect_init_system
+  if [[ "$SERVICE_SUPPORTED" == "true" ]]; then
+    ENABLE_SERVICE="true"
+    START_NOW="true"
+    info "检测到 systemd，默认创建服务、设置开机自启，并在安装完成后立即启动。"
+  else
+    ENABLE_SERVICE="false"
+    START_NOW="false"
+    warn "当前系统未检测到可用的 systemd，将跳过服务创建。安装完成后请手动前台运行程序。"
+  fi
 }
 
 prepare_dirs() {
@@ -406,13 +490,12 @@ install_from_release() {
       ;;
     *.zip)
       if ! command_exists unzip; then
-        if command_exists apt-get; then
-          apt-get update
-          apt-get install -y unzip
-        else
-          error "当前系统缺少 unzip，无法解压 zip 资产。"
-          exit 1
-        fi
+        warn "当前系统缺少 unzip，尝试自动安装。"
+        install_packages
+      fi
+      if ! command_exists unzip; then
+        error "当前系统仍缺少 unzip，无法解压 zip 资产。"
+        exit 1
       fi
       unzip -q "$TMP_DIR/asset" -d "$TMP_DIR/unpacked"
       ;;
@@ -596,10 +679,15 @@ show_install_summary() {
   echo "  curl ${local_url}/v1/models \\
     -H \"Authorization: Bearer ${API_KEY}\""
   echo
-  echo -e "${BOLD}常用服务管理命令${RESET}"
-  echo "  systemctl status ${SERVICE_NAME}"
-  echo "  systemctl restart ${SERVICE_NAME}"
-  echo "  journalctl -u ${SERVICE_NAME} -f"
+  if [[ "$ENABLE_SERVICE" == "true" ]]; then
+    echo -e "${BOLD}常用服务管理命令${RESET}"
+    echo "  systemctl status ${SERVICE_NAME}"
+    echo "  systemctl restart ${SERVICE_NAME}"
+    echo "  journalctl -u ${SERVICE_NAME} -f"
+  else
+    echo -e "${BOLD}当前系统未启用 systemd 服务${RESET}"
+    echo "  请手动运行：${BIN_PATH} -config ${CONFIG_DIR}/config.yaml"
+  fi
   line
 
   if [[ -z "$HOST_VALUE" ]]; then
@@ -638,7 +726,13 @@ read_first_api_key() {
 }
 
 get_lan_ip() {
-  ip route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' || true
+  if command_exists ip; then
+    ip route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' || true
+  elif command_exists hostname; then
+    hostname -I 2>/dev/null | awk '{print $1}' || true
+  else
+    true
+  fi
 }
 
 get_public_ip() {
@@ -717,8 +811,14 @@ show_current_params() {
 
 start_service() {
   headline "启动服务"
-  collect_existing_install_info
+  detect_init_system
+  if [[ "$SERVICE_SUPPORTED" != "true" ]]; then
+    warn "当前系统未检测到 systemd，无法通过菜单启动服务。"
+    info "请手动运行：${BIN_PATH} -config ${CONFIG_DIR}/config.yaml"
+    return 1
+  fi
 
+  collect_existing_install_info
   if ! systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
     error "未检测到 systemd 服务：${SERVICE_NAME}"
     return 1
@@ -732,8 +832,13 @@ start_service() {
 
 stop_service() {
   headline "停止服务"
-  collect_existing_install_info
+  detect_init_system
+  if [[ "$SERVICE_SUPPORTED" != "true" ]]; then
+    warn "当前系统未检测到 systemd，无法通过菜单停止服务。"
+    return 1
+  fi
 
+  collect_existing_install_info
   if ! systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
     error "未检测到 systemd 服务：${SERVICE_NAME}"
     return 1
@@ -746,8 +851,14 @@ stop_service() {
 
 restart_service() {
   headline "重启服务"
-  collect_existing_install_info
+  detect_init_system
+  if [[ "$SERVICE_SUPPORTED" != "true" ]]; then
+    warn "当前系统未检测到 systemd，无法通过菜单重启服务。"
+    info "请手动停止并重新运行：${BIN_PATH} -config ${CONFIG_DIR}/config.yaml"
+    return 1
+  fi
 
+  collect_existing_install_info
   if ! systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
     error "未检测到 systemd 服务：${SERVICE_NAME}"
     return 1
@@ -761,8 +872,14 @@ restart_service() {
 
 show_service_status() {
   headline "查看服务状态"
-  collect_existing_install_info
+  detect_init_system
+  if [[ "$SERVICE_SUPPORTED" != "true" ]]; then
+    warn "当前系统未检测到 systemd，无法通过菜单查看 systemd 服务状态。"
+    info "请手动检查进程或直接前台运行：${BIN_PATH} -config ${CONFIG_DIR}/config.yaml"
+    return 1
+  fi
 
+  collect_existing_install_info
   if ! systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
     error "未检测到 systemd 服务：${SERVICE_NAME}"
     return 1
@@ -773,8 +890,14 @@ show_service_status() {
 
 show_service_logs() {
   headline "查看实时日志"
-  collect_existing_install_info
+  detect_init_system
+  if [[ "$SERVICE_SUPPORTED" != "true" ]]; then
+    warn "当前系统未检测到 systemd，无法通过 journalctl 查看服务日志。"
+    info "如果你是手动前台运行，请直接查看当前终端输出。"
+    return 1
+  fi
 
+  collect_existing_install_info
   if ! systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
     error "未检测到 systemd 服务：${SERVICE_NAME}"
     return 1
@@ -882,7 +1005,9 @@ do_install() {
 
   write_config
   write_env_file
-  write_service_file
+  if [[ "$ENABLE_SERVICE" == "true" ]]; then
+    write_service_file
+  fi
   show_oauth_help
   show_install_summary
 }
