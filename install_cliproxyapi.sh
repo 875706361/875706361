@@ -1,0 +1,788 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+PROJECT_NAME="CLIProxyAPI"
+REPO_URL="https://github.com/router-for-me/CLIProxyAPI.git"
+GITHUB_API_LATEST="https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest"
+MIN_GO_VERSION="1.26.0"
+DEFAULT_INSTALL_DIR="/opt/cliproxyapi"
+DEFAULT_CONFIG_DIR="/etc/cliproxyapi"
+DEFAULT_DATA_DIR="/var/lib/cliproxyapi"
+DEFAULT_LOG_DIR="/var/log/cliproxyapi"
+DEFAULT_BIN_PATH="/usr/local/bin/cliproxyapi"
+DEFAULT_SERVICE_NAME="cliproxyapi"
+DEFAULT_USER="root"
+DEFAULT_GROUP="root"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
+RESET='\033[0m'
+
+TMP_DIR=""
+INSTALL_METHOD=""
+RELEASE_TAG=""
+RELEASE_JSON=""
+RELEASE_ASSET_NAME=""
+RELEASE_ASSET_URL=""
+
+INSTALL_DIR=""
+CONFIG_DIR=""
+DATA_DIR=""
+LOG_DIR=""
+BIN_PATH=""
+SERVICE_NAME=""
+RUN_USER=""
+RUN_GROUP=""
+HOST_VALUE=""
+PORT_VALUE=""
+AUTH_DIR=""
+API_KEY=""
+ENABLE_WS_AUTH="false"
+ENABLE_REMOTE_MGMT="true"
+ENABLE_MGMT="true"
+MGMT_KEY=""
+ENABLE_TLS="false"
+TLS_CERT=""
+TLS_KEY=""
+ENABLE_SERVICE="true"
+START_NOW="true"
+
+info() { echo -e "${BLUE}[信息]${RESET} $*"; }
+warn() { echo -e "${YELLOW}[警告]${RESET} $*"; }
+error() { echo -e "${RED}[错误]${RESET} $*" >&2; }
+success() { echo -e "${GREEN}[完成]${RESET} $*"; }
+headline() { echo -e "\n${BOLD}== $* ==${RESET}"; }
+
+trap 'ret=$?; if [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]]; then rm -rf "$TMP_DIR"; fi; exit $ret' EXIT
+
+require_root() {
+  if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+    error "请使用 root 运行此脚本。"
+    exit 1
+  fi
+}
+
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+prompt() {
+  local text="$1"
+  local default="${2-}"
+  local ans
+  if [[ -n "$default" ]]; then
+    read -r -p "$text [$default]: " ans
+    ans="${ans:-$default}"
+  else
+    read -r -p "$text: " ans
+  fi
+  printf '%s' "$ans"
+}
+
+prompt_secret() {
+  local text="$1"
+  local ans1=""
+  local ans2=""
+  while true; do
+    read -r -s -p "$text: " ans1
+    echo
+    if [[ -z "$ans1" ]]; then
+      warn "密码不能为空，请重新输入。"
+      continue
+    fi
+    read -r -s -p "请再次输入以确认: " ans2
+    echo
+    if [[ "$ans1" != "$ans2" ]]; then
+      warn "两次输入不一致，请重新输入。"
+      continue
+    fi
+    printf '%s' "$ans1"
+    return 0
+  done
+}
+
+confirm() {
+  local text="$1"
+  local default="${2:-Y}"
+  local hint ans
+  if [[ "$default" =~ ^[Yy]$ ]]; then
+    hint="Y/n"
+  else
+    hint="y/N"
+  fi
+  read -r -p "$text [$hint]: " ans
+  ans="${ans:-$default}"
+  [[ "$ans" =~ ^[Yy]$ ]]
+}
+
+rand_key() {
+  if command_exists openssl; then
+    openssl rand -hex 24
+  else
+    tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48
+  fi
+}
+
+version_ge() {
+  local a="$1" b="$2"
+  [[ "$(printf '%s\n%s\n' "$a" "$b" | sort -V | tail -n1)" == "$a" ]]
+}
+
+install_packages() {
+  local pkgs=(curl git tar sed awk grep coreutils ca-certificates jq)
+
+  if command_exists apt-get; then
+    info "使用 apt 安装依赖..."
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkgs[@]}"
+  elif command_exists dnf; then
+    info "使用 dnf 安装依赖..."
+    dnf install -y "${pkgs[@]}"
+  elif command_exists yum; then
+    info "使用 yum 安装依赖..."
+    yum install -y "${pkgs[@]}"
+  elif command_exists zypper; then
+    info "使用 zypper 安装依赖..."
+    zypper --non-interactive install "${pkgs[@]}"
+  elif command_exists apk; then
+    info "使用 apk 安装依赖..."
+    apk add --no-cache "${pkgs[@]}"
+  else
+    warn "未识别到包管理器，请手动确保已安装：${pkgs[*]}"
+  fi
+}
+
+ensure_go() {
+  local current=""
+  local need_install="false"
+
+  if command_exists go; then
+    current="$(go version | awk '{print $3}' | sed 's/^go//')"
+    if version_ge "$current" "$MIN_GO_VERSION"; then
+      success "已检测到 Go $current"
+      return 0
+    fi
+    warn "当前 Go 版本为 $current，但项目要求至少 $MIN_GO_VERSION"
+    need_install="true"
+  else
+    warn "未检测到 Go 环境"
+    need_install="true"
+  fi
+
+  if [[ "$need_install" == "true" ]]; then
+    if ! confirm "是否自动安装/升级 Go（会覆盖 /usr/local/go）？" Y; then
+      error "没有满足要求的 Go，无法继续源码编译安装。"
+      exit 1
+    fi
+
+    local arch os go_arch latest_json version tarball url
+    os="linux"
+    arch="$(uname -m)"
+    case "$arch" in
+      x86_64|amd64) go_arch="amd64" ;;
+      aarch64|arm64) go_arch="arm64" ;;
+      armv7l) go_arch="armv6l" ;;
+      *) error "暂不支持的架构：$arch"; exit 1 ;;
+    esac
+
+    latest_json="$(curl -fsSL https://go.dev/dl/?mode=json)"
+    version="$(printf '%s' "$latest_json" | jq -r '.[0].version')"
+    tarball="${version}.${os}-${go_arch}.tar.gz"
+    url="https://go.dev/dl/${tarball}"
+
+    info "正在下载并安装 $version ($go_arch)..."
+    TMP_DIR="$(mktemp -d)"
+    curl -fL "$url" -o "$TMP_DIR/go.tgz"
+    rm -rf /usr/local/go
+    tar -C /usr/local -xzf "$TMP_DIR/go.tgz"
+    export PATH="/usr/local/go/bin:$PATH"
+
+    if ! command_exists go; then
+      error "Go 安装后仍不可用。"
+      exit 1
+    fi
+
+    current="$(go version | awk '{print $3}' | sed 's/^go//')"
+    if ! version_ge "$current" "$MIN_GO_VERSION"; then
+      error "安装后的 Go 版本($current)仍低于要求($MIN_GO_VERSION)。"
+      exit 1
+    fi
+    success "Go 安装完成：$current"
+  fi
+}
+
+choose_install_method() {
+  echo "请选择安装方式："
+  echo "  1) 源码编译安装（推荐，兼容性最好）"
+  echo "  2) GitHub Release 二进制安装（如果存在适配资产）"
+  local choice
+  choice="$(prompt '请输入编号' '1')"
+  case "$choice" in
+    1) INSTALL_METHOD="source" ;;
+    2) INSTALL_METHOD="release" ;;
+    *) warn "输入无效，默认使用源码编译安装。"; INSTALL_METHOD="source" ;;
+  esac
+}
+
+fetch_latest_release_meta() {
+  RELEASE_JSON="$(curl -fsSL "$GITHUB_API_LATEST")"
+  RELEASE_TAG="$(printf '%s' "$RELEASE_JSON" | jq -r '.tag_name // empty')"
+  [[ -n "$RELEASE_TAG" ]]
+}
+
+resolve_release_asset() {
+  local arch patterns re
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) patterns=('linux.*amd64' 'amd64.*linux') ;;
+    aarch64|arm64) patterns=('linux.*arm64' 'arm64.*linux') ;;
+    *) error "暂不支持的架构：$arch"; return 1 ;;
+  esac
+
+  fetch_latest_release_meta || return 1
+
+  for re in "${patterns[@]}"; do
+    RELEASE_ASSET_URL="$(printf '%s' "$RELEASE_JSON" | jq -r --arg re "$re" '.assets[] | select((.name|test($re; "i")) and (.name|test("tar\\.gz|tgz|zip|linux"; "i"))) | .browser_download_url' | head -n1)"
+    RELEASE_ASSET_NAME="$(printf '%s' "$RELEASE_JSON" | jq -r --arg re "$re" '.assets[] | select((.name|test($re; "i")) and (.name|test("tar\\.gz|tgz|zip|linux"; "i"))) | .name' | head -n1)"
+    if [[ -n "$RELEASE_ASSET_URL" && -n "$RELEASE_ASSET_NAME" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+collect_install_settings() {
+  headline "收集安装参数"
+  INSTALL_DIR="$(prompt '源码/程序目录' "$DEFAULT_INSTALL_DIR")"
+  CONFIG_DIR="$(prompt '配置目录' "$DEFAULT_CONFIG_DIR")"
+  DATA_DIR="$(prompt '认证/数据目录' "$DEFAULT_DATA_DIR")"
+  LOG_DIR="$(prompt '日志目录' "$DEFAULT_LOG_DIR")"
+  BIN_PATH="$(prompt '二进制安装路径' "$DEFAULT_BIN_PATH")"
+  SERVICE_NAME="$(prompt 'systemd 服务名' "$DEFAULT_SERVICE_NAME")"
+  RUN_USER="$(prompt '运行用户' "$DEFAULT_USER")"
+  RUN_GROUP="$(prompt '运行组' "$DEFAULT_GROUP")"
+
+  echo "监听地址选项："
+  echo "  1) 仅本机（127.0.0.1，更安全，推荐）"
+  echo "  2) 全网卡（0.0.0.0，对外开放）"
+  local host_choice
+  host_choice="$(prompt '请选择' '1')"
+  case "$host_choice" in
+    1) HOST_VALUE="127.0.0.1" ;;
+    2) HOST_VALUE="" ;;
+    *) HOST_VALUE="127.0.0.1" ;;
+  esac
+
+  PORT_VALUE="$(prompt '服务监听端口 / Web 后台端口（两者共用同一个端口）' '8317')"
+  AUTH_DIR="$DATA_DIR/auths"
+  API_KEY="$(prompt '客户端 API Key（留空自动生成）' '')"
+  API_KEY="${API_KEY:-$(rand_key)}"
+
+  ENABLE_WS_AUTH="$(confirm '是否启用 WebSocket 鉴权（ws-auth）？' N && echo true || echo false)"
+  ENABLE_REMOTE_MGMT="$(confirm '是否允许远程访问 Web 后台 / 管理接口？' Y && echo true || echo false)"
+  ENABLE_MGMT="true"
+
+  echo ""
+  echo "现在需要设置 Web 后台登录密码（即 Management API 密钥）。"
+  echo "这个密码用于后台/管理接口登录。"
+  MGMT_KEY="$(prompt_secret '请输入 Web 后台登录密码')"
+
+  ENABLE_TLS="$(confirm '是否启用内置 TLS/HTTPS（需提前准备证书）？' N && echo true || echo false)"
+  TLS_CERT=""
+  TLS_KEY=""
+  if [[ "$ENABLE_TLS" == "true" ]]; then
+    TLS_CERT="$(prompt 'TLS 证书路径' '/etc/ssl/certs/cliproxyapi.crt')"
+    TLS_KEY="$(prompt 'TLS 私钥路径' '/etc/ssl/private/cliproxyapi.key')"
+  fi
+
+  ENABLE_SERVICE="true"
+  START_NOW="true"
+  info "将默认创建 systemd 服务、设置开机自启，并在安装完成后立即启动。"
+}
+
+prepare_dirs() {
+  mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$AUTH_DIR" "$LOG_DIR" "$DATA_DIR"
+  chmod 700 "$DATA_DIR" "$AUTH_DIR" || true
+  chmod 755 "$INSTALL_DIR" "$CONFIG_DIR" || true
+}
+
+download_source() {
+  headline "获取源码"
+  if [[ -d "$INSTALL_DIR/.git" ]]; then
+    info "检测到已有源码目录，正在更新..."
+    git -C "$INSTALL_DIR" fetch --tags --force
+    git -C "$INSTALL_DIR" pull --ff-only
+  else
+    rm -rf "$INSTALL_DIR"
+    git clone "$REPO_URL" "$INSTALL_DIR"
+  fi
+}
+
+install_from_source() {
+  headline "执行源码编译安装"
+  install_packages
+  ensure_go
+  download_source
+  export PATH="/usr/local/go/bin:$PATH"
+  pushd "$INSTALL_DIR" >/dev/null
+  info "开始编译二进制..."
+  CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$BIN_PATH" ./cmd/server
+  popd >/dev/null
+  chmod 755 "$BIN_PATH"
+  success "二进制已安装到：$BIN_PATH"
+}
+
+install_from_release() {
+  headline "执行 Release 二进制安装"
+  install_packages
+  if ! resolve_release_asset; then
+    warn "没有找到适合当前系统架构的发布资产，自动回退到源码安装。"
+    INSTALL_METHOD="source"
+    install_from_source
+    return
+  fi
+
+  info "使用发布版本：${RELEASE_TAG:-latest}"
+  info "匹配到的资产：$RELEASE_ASSET_NAME"
+  TMP_DIR="$(mktemp -d)"
+  curl -fL "$RELEASE_ASSET_URL" -o "$TMP_DIR/asset"
+
+  case "$RELEASE_ASSET_NAME" in
+    *.tar.gz|*.tgz)
+      tar -xzf "$TMP_DIR/asset" -C "$TMP_DIR"
+      ;;
+    *.zip)
+      if ! command_exists unzip; then
+        if command_exists apt-get; then
+          apt-get update
+          apt-get install -y unzip
+        else
+          error "当前系统缺少 unzip，无法解压 zip 资产。"
+          exit 1
+        fi
+      fi
+      unzip -q "$TMP_DIR/asset" -d "$TMP_DIR/unpacked"
+      ;;
+    *)
+      warn "未知资产格式，将尝试直接作为二进制使用。"
+      ;;
+  esac
+
+  local found_bin
+  found_bin="$(find "$TMP_DIR" -type f \( -name 'cliproxyapi' -o -name 'CLIProxyAPI' -o -perm -111 \) | head -n1 || true)"
+  if [[ -z "$found_bin" ]]; then
+    warn "未在 release 包中找到可执行文件，自动回退到源码安装。"
+    INSTALL_METHOD="source"
+    install_from_source
+    return
+  fi
+
+  install -m 0755 "$found_bin" "$BIN_PATH"
+  success "二进制已安装到：$BIN_PATH"
+}
+
+write_config() {
+  headline "生成配置文件"
+  local cfg="$CONFIG_DIR/config.yaml"
+  cat >"$cfg" <<EOF
+host: "${HOST_VALUE}"
+port: ${PORT_VALUE}
+
+tls:
+  enable: ${ENABLE_TLS}
+  cert: "${TLS_CERT}"
+  key: "${TLS_KEY}"
+
+remote-management:
+  allow-remote: ${ENABLE_REMOTE_MGMT}
+  secret-key: "${MGMT_KEY}"
+  disable-control-panel: false
+  panel-github-repository: "https://github.com/router-for-me/Cli-Proxy-API-Management-Center"
+
+auth-dir: "${AUTH_DIR}"
+
+api-keys:
+  - "${API_KEY}"
+
+debug: false
+pprof:
+  enable: false
+  addr: "127.0.0.1:8316"
+
+commercial-mode: false
+logging-to-file: true
+logs-max-total-size-mb: 512
+error-logs-max-files: 10
+usage-statistics-enabled: true
+proxy-url: ""
+force-model-prefix: false
+passthrough-headers: false
+request-retry: 3
+max-retry-credentials: 0
+max-retry-interval: 30
+
+quota-exceeded:
+  switch-project: true
+  switch-preview-model: true
+
+routing:
+  strategy: "round-robin"
+
+ws-auth: ${ENABLE_WS_AUTH}
+nonstream-keepalive-interval: 0
+EOF
+  chmod 600 "$cfg"
+  success "配置文件已写入：$cfg"
+}
+
+write_env_file() {
+  local envf="$CONFIG_DIR/${SERVICE_NAME}.env"
+  cat >"$envf" <<EOF
+CONFIG_PATH=${CONFIG_DIR}/config.yaml
+EOF
+  chmod 600 "$envf"
+}
+
+write_service_file() {
+  headline "创建 systemd 服务"
+  local service_file="/etc/systemd/system/${SERVICE_NAME}.service"
+  cat >"$service_file" <<EOF
+[Unit]
+Description=CLIProxyAPI 服务
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${RUN_USER}
+Group=${RUN_GROUP}
+WorkingDirectory=${INSTALL_DIR}
+EnvironmentFile=${CONFIG_DIR}/${SERVICE_NAME}.env
+ExecStart=${BIN_PATH} -config \$CONFIG_PATH
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths=${CONFIG_DIR} ${DATA_DIR} ${LOG_DIR} ${INSTALL_DIR}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable "$SERVICE_NAME"
+  success "systemd 服务已创建，并已设为开机自启：$service_file"
+
+  if [[ "$START_NOW" == "true" ]]; then
+    systemctl restart "$SERVICE_NAME"
+    sleep 2
+    systemctl --no-pager --full status "$SERVICE_NAME" || true
+  fi
+}
+
+show_oauth_help() {
+  headline "后续 OAuth 登录命令示例"
+  cat <<EOF
+如需登录不同 provider，可按需执行：
+
+  ${BIN_PATH} -config ${CONFIG_DIR}/config.yaml -login
+  ${BIN_PATH} -config ${CONFIG_DIR}/config.yaml -codex-login
+  ${BIN_PATH} -config ${CONFIG_DIR}/config.yaml -codex-device-login
+  ${BIN_PATH} -config ${CONFIG_DIR}/config.yaml -claude-login
+  ${BIN_PATH} -config ${CONFIG_DIR}/config.yaml -qwen-login
+  ${BIN_PATH} -config ${CONFIG_DIR}/config.yaml -iflow-login
+  ${BIN_PATH} -config ${CONFIG_DIR}/config.yaml -kimi-login
+
+如果当前环境没有图形浏览器，可在命令后追加：-no-browser
+EOF
+}
+
+show_install_summary() {
+  headline "安装完成"
+  cat <<EOF
+项目名称：           ${PROJECT_NAME}
+安装方式：           ${INSTALL_METHOD}
+二进制路径：         ${BIN_PATH}
+配置文件：           ${CONFIG_DIR}/config.yaml
+环境文件：           ${CONFIG_DIR}/${SERVICE_NAME}.env
+程序目录：           ${INSTALL_DIR}
+数据目录：           ${DATA_DIR}
+认证目录：           ${AUTH_DIR}
+日志目录：           ${LOG_DIR}
+监听地址：           ${HOST_VALUE:-0.0.0.0}
+监听端口：           ${PORT_VALUE}
+Web 后台端口：       ${PORT_VALUE}（与服务端口共用）
+客户端 API Key：     ${API_KEY}
+Web 后台是否启用：   ${ENABLE_MGMT}
+Web 后台登录密码：   ${MGMT_KEY}
+是否允许远程后台：   ${ENABLE_REMOTE_MGMT}
+开机自启：           ${ENABLE_SERVICE}
+服务启动状态：       ${START_NOW}
+systemd 服务名：      ${SERVICE_NAME}
+EOF
+
+  cat <<EOF
+
+OpenAI 兼容接口测试示例：
+  curl http://127.0.0.1:${PORT_VALUE}/v1/models \
+    -H "Authorization: Bearer ${API_KEY}"
+
+服务管理命令：
+  systemctl status ${SERVICE_NAME}
+  systemctl restart ${SERVICE_NAME}
+  journalctl -u ${SERVICE_NAME} -f
+EOF
+
+  if [[ -z "$HOST_VALUE" ]]; then
+    warn "当前配置为对外监听（0.0.0.0/全部网卡）。请务必搭配防火墙、反向代理或 TLS。"
+  else
+    info "当前仅监听本机地址，安全性更高。"
+  fi
+
+  if [[ "$ENABLE_REMOTE_MGMT" == "true" ]]; then
+    warn "你已开启远程 Web 后台/管理接口。建议尽量配合 HTTPS 或仅在可信网络中使用。"
+  fi
+}
+
+collect_existing_install_info() {
+  SERVICE_NAME="$(prompt '请输入已安装的 systemd 服务名' "$DEFAULT_SERVICE_NAME")"
+  CONFIG_DIR="$(prompt '请输入配置目录' "$DEFAULT_CONFIG_DIR")"
+  INSTALL_DIR="$(prompt '请输入程序目录' "$DEFAULT_INSTALL_DIR")"
+  DATA_DIR="$(prompt '请输入数据目录' "$DEFAULT_DATA_DIR")"
+  LOG_DIR="$(prompt '请输入日志目录' "$DEFAULT_LOG_DIR")"
+  BIN_PATH="$(prompt '请输入二进制路径' "$DEFAULT_BIN_PATH")"
+}
+
+read_config_value() {
+  local key="$1"
+  local file="$2"
+  awk -F': ' -v k="$key" '$1==k {gsub(/^"|"$/, "", $2); print $2; exit}' "$file" 2>/dev/null || true
+}
+
+read_first_api_key() {
+  local file="$1"
+  awk '
+    $1=="api-keys:" {in_keys=1; next}
+    in_keys && $1=="-" {gsub(/"/, "", $2); print $2; exit}
+    in_keys && $0 !~ /^  - / && $0 !~ /^api-keys:/ {in_keys=0}
+  ' "$file" 2>/dev/null || true
+}
+
+show_current_params() {
+  headline "显示当前安装参数"
+  collect_existing_install_info
+
+  local cfg="$CONFIG_DIR/config.yaml"
+  local host port auth_dir api_key allow_remote secret_key ws_auth
+  local enabled_state active_state service_exists
+
+  service_exists="否"
+  enabled_state="未知"
+  active_state="未知"
+
+  if systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
+    service_exists="是"
+    enabled_state="$(systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || true)"
+    active_state="$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)"
+  fi
+
+  if [[ -f "$cfg" ]]; then
+    host="$(read_config_value 'host' "$cfg")"
+    port="$(read_config_value 'port' "$cfg")"
+    auth_dir="$(read_config_value 'auth-dir' "$cfg")"
+    allow_remote="$(read_config_value '  allow-remote' "$cfg")"
+    secret_key="$(read_config_value '  secret-key' "$cfg")"
+    ws_auth="$(read_config_value 'ws-auth' "$cfg")"
+    api_key="$(read_first_api_key "$cfg")"
+  else
+    host=""
+    port=""
+    auth_dir=""
+    allow_remote=""
+    secret_key=""
+    ws_auth=""
+    api_key=""
+  fi
+
+  cat <<EOF
+服务名：             ${SERVICE_NAME}
+服务文件存在：       ${service_exists}
+开机自启状态：       ${enabled_state}
+当前运行状态：       ${active_state}
+二进制路径：         ${BIN_PATH}
+程序目录：           ${INSTALL_DIR}
+配置目录：           ${CONFIG_DIR}
+数据目录：           ${DATA_DIR}
+日志目录：           ${LOG_DIR}
+配置文件：           ${cfg}
+监听地址：           ${host:-未读取到}
+监听端口：           ${port:-未读取到}
+Web 后台端口：       ${port:-未读取到}（与服务端口共用）
+认证目录：           ${auth_dir:-未读取到}
+客户端 API Key：     ${api_key:-未读取到}
+Web 后台远程访问：   ${allow_remote:-未读取到}
+Web 后台登录密码：   ${secret_key:-未读取到}
+WebSocket 鉴权：     ${ws_auth:-未读取到}
+EOF
+}
+
+restart_service() {
+  headline "重启服务"
+  collect_existing_install_info
+
+  if ! systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
+    error "未检测到 systemd 服务：${SERVICE_NAME}"
+    return 1
+  fi
+
+  systemctl daemon-reload
+  systemctl restart "$SERVICE_NAME"
+  sleep 2
+  systemctl --no-pager --full status "$SERVICE_NAME" || true
+}
+
+update_program() {
+  headline "更新 CLIProxyAPI"
+  collect_existing_install_info
+
+  if [[ ! -x "$BIN_PATH" ]]; then
+    warn "未找到可执行文件：$BIN_PATH"
+    if ! confirm "仍然继续更新吗？" N; then
+      return
+    fi
+  fi
+
+  if [[ -f "$CONFIG_DIR/config.yaml" ]]; then
+    info "检测到现有配置文件：$CONFIG_DIR/config.yaml"
+  else
+    warn "未找到配置文件：$CONFIG_DIR/config.yaml"
+  fi
+
+  choose_install_method
+  case "$INSTALL_METHOD" in
+    source) install_from_source ;;
+    release) install_from_release ;;
+    *) error "未知安装方式：$INSTALL_METHOD"; exit 1 ;;
+  esac
+
+  if systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
+    if confirm "检测到 systemd 服务 ${SERVICE_NAME}，是否现在重启服务？" Y; then
+      systemctl daemon-reload
+      systemctl restart "$SERVICE_NAME"
+      systemctl --no-pager --full status "$SERVICE_NAME" || true
+    fi
+  else
+    warn "未检测到 systemd 服务 ${SERVICE_NAME}，已仅完成程序更新。"
+  fi
+
+  success "更新完成。"
+}
+
+uninstall_program() {
+  headline "卸载 CLIProxyAPI"
+  collect_existing_install_info
+
+  echo "即将卸载以下内容："
+  echo "  服务名：   $SERVICE_NAME"
+  echo "  二进制：   $BIN_PATH"
+  echo "  配置目录： $CONFIG_DIR"
+  echo "  程序目录： $INSTALL_DIR"
+  echo "  数据目录： $DATA_DIR"
+  echo "  日志目录： $LOG_DIR"
+  echo
+  warn "卸载操作可能删除配置、认证信息和日志，请确认后继续。"
+
+  local remove_config remove_data remove_logs remove_program
+  remove_config="$(confirm '是否删除配置目录？' N && echo true || echo false)"
+  remove_data="$(confirm '是否删除数据目录（含 auth/token 等）？' N && echo true || echo false)"
+  remove_logs="$(confirm '是否删除日志目录？' N && echo true || echo false)"
+  remove_program="$(confirm '是否删除程序目录？' N && echo true || echo false)"
+
+  if ! confirm '确认开始卸载？' N; then
+    echo '已取消卸载。'
+    return
+  fi
+
+  if systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
+    info "停止并禁用 systemd 服务：$SERVICE_NAME"
+    systemctl stop "$SERVICE_NAME" || true
+    systemctl disable "$SERVICE_NAME" || true
+    rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
+    systemctl daemon-reload
+    systemctl reset-failed || true
+  else
+    warn "未检测到 systemd 服务 ${SERVICE_NAME}"
+  fi
+
+  rm -f "$BIN_PATH"
+  rm -f "$CONFIG_DIR/${SERVICE_NAME}.env"
+
+  [[ "$remove_config" == "true" ]] && rm -rf "$CONFIG_DIR"
+  [[ "$remove_data" == "true" ]] && rm -rf "$DATA_DIR"
+  [[ "$remove_logs" == "true" ]] && rm -rf "$LOG_DIR"
+  [[ "$remove_program" == "true" ]] && rm -rf "$INSTALL_DIR"
+
+  success "卸载完成。"
+}
+
+do_install() {
+  headline "安装 CLIProxyAPI"
+  choose_install_method
+  collect_install_settings
+  prepare_dirs
+
+  case "$INSTALL_METHOD" in
+    source) install_from_source ;;
+    release) install_from_release ;;
+    *) error "未知安装方式：$INSTALL_METHOD"; exit 1 ;;
+  esac
+
+  write_config
+  write_env_file
+  write_service_file
+  show_oauth_help
+  show_install_summary
+}
+
+show_menu() {
+  echo
+  echo "===================================="
+  echo "      CLIProxyAPI 中文管理脚本"
+  echo "===================================="
+  echo "1) 安装 CLIProxyAPI"
+  echo "2) 更新 CLIProxyAPI"
+  echo "3) 重启 CLIProxyAPI 服务"
+  echo "4) 显示当前安装参数"
+  echo "5) 卸载 CLIProxyAPI"
+  echo "6) 退出"
+  echo
+}
+
+main() {
+  require_root
+  while true; do
+    show_menu
+    local choice
+    choice="$(prompt '请选择操作' '1')"
+    case "$choice" in
+      1) do_install ;;
+      2) update_program ;;
+      3) restart_service ;;
+      4) show_current_params ;;
+      5) uninstall_program ;;
+      6)
+        echo "已退出。"
+        exit 0
+        ;;
+      *) warn "无效选项，请重新输入。" ;;
+    esac
+  done
+}
+
+main "$@"
