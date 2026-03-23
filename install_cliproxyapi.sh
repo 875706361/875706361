@@ -18,7 +18,10 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
 BOLD='\033[1m'
+DIM='\033[2m'
 RESET='\033[0m'
 
 TMP_DIR=""
@@ -50,11 +53,47 @@ TLS_KEY=""
 ENABLE_SERVICE="true"
 START_NOW="true"
 
+STEP_NO=0
+
 info() { echo -e "${BLUE}[信息]${RESET} $*"; }
 warn() { echo -e "${YELLOW}[警告]${RESET} $*"; }
 error() { echo -e "${RED}[错误]${RESET} $*" >&2; }
 success() { echo -e "${GREEN}[完成]${RESET} $*"; }
-headline() { echo -e "\n${BOLD}== $* ==${RESET}"; }
+line() { printf '%b\n' "${DIM}────────────────────────────────────────────────────────────${RESET}"; }
+headline() { echo -e "\n${BOLD}${CYAN}▶ $*${RESET}"; line; }
+kv() { printf "${BOLD}%-20s${RESET} %s\n" "$1" "$2"; }
+section() { echo -e "\n${MAGENTA}${BOLD}$1${RESET}"; }
+step() { STEP_NO=$((STEP_NO+1)); echo -e "\n${BOLD}${GREEN}[步骤 ${STEP_NO}]${RESET} $*"; }
+reset_steps() { STEP_NO=0; }
+show_box() {
+  local title="$1"
+  shift
+  echo -e "${CYAN}${BOLD}┌─ ${title} ─${RESET}"
+  while (($#)); do
+    echo -e "${CYAN}${BOLD}│${RESET} $1"
+    shift
+  done
+  echo -e "${CYAN}${BOLD}└────────────────────────────────────────────${RESET}"
+}
+show_warn_box() {
+  local title="$1"
+  shift
+  echo -e "${YELLOW}${BOLD}┌─ ${title} ─${RESET}"
+  while (($#)); do
+    echo -e "${YELLOW}${BOLD}│${RESET} $1"
+    shift
+  done
+  echo -e "${YELLOW}${BOLD}└────────────────────────────────────────────${RESET}"
+}
+show_banner() {
+  clear 2>/dev/null || true
+  echo -e "${CYAN}${BOLD}╔══════════════════════════════════════════════╗${RESET}"
+  echo -e "${CYAN}${BOLD}║         CLIProxyAPI 中文管理脚本            ║${RESET}"
+  echo -e "${CYAN}${BOLD}║      安装 / 更新 / 重启 / 卸载 / 查看       ║${RESET}"
+  echo -e "${CYAN}${BOLD}╚══════════════════════════════════════════════╝${RESET}"
+  echo -e "${DIM}项目: ${PROJECT_NAME}    默认服务名: ${DEFAULT_SERVICE_NAME}${RESET}"
+  line
+}
 
 trap 'ret=$?; if [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]]; then rm -rf "$TMP_DIR"; fi; exit $ret' EXIT
 
@@ -255,7 +294,11 @@ resolve_release_asset() {
 }
 
 collect_install_settings() {
+  reset_steps
   headline "收集安装参数"
+  show_box "安装向导" \
+    "接下来会引导你完成 CLIProxyAPI 安装。" \
+    "建议优先选择本机监听，确认稳定后再开放公网访问。"
   INSTALL_DIR="$(prompt '源码/程序目录' "$DEFAULT_INSTALL_DIR")"
   CONFIG_DIR="$(prompt '配置目录' "$DEFAULT_CONFIG_DIR")"
   DATA_DIR="$(prompt '认证/数据目录' "$DEFAULT_DATA_DIR")"
@@ -286,8 +329,9 @@ collect_install_settings() {
   ENABLE_MGMT="true"
 
   echo ""
-  echo "现在需要设置 Web 后台登录密码（即 Management API 密钥）。"
-  echo "这个密码用于后台/管理接口登录。"
+  show_warn_box "后台安全提示" \
+    "现在需要设置 Web 后台登录密码（即 Management API 密钥）。" \
+    "这个密码用于后台/管理接口登录，请务必自己保存好。"
   MGMT_KEY="$(prompt_secret '请输入 Web 后台登录密码')"
 
   ENABLE_TLS="$(confirm '是否启用内置 TLS/HTTPS（需提前准备证书）？' N && echo true || echo false)"
@@ -323,9 +367,13 @@ download_source() {
 
 install_from_source() {
   headline "执行源码编译安装"
+  step "安装基础依赖"
   install_packages
+  step "检查 Go 环境"
   ensure_go
+  step "获取项目源码"
   download_source
+  step "编译二进制文件"
   export PATH="/usr/local/go/bin:$PATH"
   pushd "$INSTALL_DIR" >/dev/null
   info "开始编译二进制..."
@@ -337,7 +385,9 @@ install_from_source() {
 
 install_from_release() {
   headline "执行 Release 二进制安装"
+  step "安装基础依赖"
   install_packages
+  step "解析 Release 资产"
   if ! resolve_release_asset; then
     warn "没有找到适合当前系统架构的发布资产，自动回退到源码安装。"
     INSTALL_METHOD="source"
@@ -386,6 +436,7 @@ install_from_release() {
 
 write_config() {
   headline "生成配置文件"
+  step "写入配置文件"
   local cfg="$CONFIG_DIR/config.yaml"
   cat >"$cfg" <<EOF
 host: "${HOST_VALUE}"
@@ -448,6 +499,7 @@ EOF
 
 write_service_file() {
   headline "创建 systemd 服务"
+  step "创建并启用 systemd 服务"
   local service_file="/etc/systemd/system/${SERVICE_NAME}.service"
   cat >"$service_file" <<EOF
 [Unit]
@@ -505,39 +557,50 @@ EOF
 
 show_install_summary() {
   headline "安装完成"
-  cat <<EOF
-项目名称：           ${PROJECT_NAME}
-安装方式：           ${INSTALL_METHOD}
-二进制路径：         ${BIN_PATH}
-配置文件：           ${CONFIG_DIR}/config.yaml
-环境文件：           ${CONFIG_DIR}/${SERVICE_NAME}.env
-程序目录：           ${INSTALL_DIR}
-数据目录：           ${DATA_DIR}
-认证目录：           ${AUTH_DIR}
-日志目录：           ${LOG_DIR}
-监听地址：           ${HOST_VALUE:-0.0.0.0}
-监听端口：           ${PORT_VALUE}
-Web 后台端口：       ${PORT_VALUE}（与服务端口共用）
-客户端 API Key：     ${API_KEY}
-Web 后台是否启用：   ${ENABLE_MGMT}
-Web 后台登录密码：   ${MGMT_KEY}
-是否允许远程后台：   ${ENABLE_REMOTE_MGMT}
-开机自启：           ${ENABLE_SERVICE}
-服务启动状态：       ${START_NOW}
-systemd 服务名：      ${SERVICE_NAME}
-EOF
+  local display_host local_url
+  display_host="${HOST_VALUE:-0.0.0.0}"
+  local_url="http://127.0.0.1:${PORT_VALUE}"
 
-  cat <<EOF
+  show_box "安装结果总览" \
+    "项目名称：${PROJECT_NAME}" \
+    "安装方式：${INSTALL_METHOD}" \
+    "服务名称：${SERVICE_NAME}" \
+    "监听地址：${display_host}" \
+    "监听端口：${PORT_VALUE}" \
+    "Web 后台端口：${PORT_VALUE}（与服务端口共用）"
 
-OpenAI 兼容接口测试示例：
-  curl http://127.0.0.1:${PORT_VALUE}/v1/models \
-    -H "Authorization: Bearer ${API_KEY}"
+  section "路径信息"
+  kv "二进制路径" "${BIN_PATH}"
+  kv "配置文件" "${CONFIG_DIR}/config.yaml"
+  kv "环境文件" "${CONFIG_DIR}/${SERVICE_NAME}.env"
+  kv "程序目录" "${INSTALL_DIR}"
+  kv "数据目录" "${DATA_DIR}"
+  kv "认证目录" "${AUTH_DIR}"
+  kv "日志目录" "${LOG_DIR}"
 
-服务管理命令：
-  systemctl status ${SERVICE_NAME}
-  systemctl restart ${SERVICE_NAME}
-  journalctl -u ${SERVICE_NAME} -f
-EOF
+  section "认证与服务"
+  kv "客户端 API Key" "${API_KEY}"
+  kv "后台登录密码" "${MGMT_KEY}"
+  kv "Web 后台启用" "${ENABLE_MGMT}"
+  kv "允许远程后台" "${ENABLE_REMOTE_MGMT}"
+  kv "开机自启" "${ENABLE_SERVICE}"
+  kv "安装后启动" "${START_NOW}"
+
+  section "访问提示"
+  kv "本机访问地址" "${local_url}"
+  kv "后台访问地址" "${local_url}"
+  kv "接口测试地址" "${local_url}/v1/models"
+
+  line
+  echo -e "${BOLD}OpenAI 兼容接口测试示例${RESET}"
+  echo "  curl ${local_url}/v1/models \\
+    -H \"Authorization: Bearer ${API_KEY}\""
+  echo
+  echo -e "${BOLD}常用服务管理命令${RESET}"
+  echo "  systemctl status ${SERVICE_NAME}"
+  echo "  systemctl restart ${SERVICE_NAME}"
+  echo "  journalctl -u ${SERVICE_NAME} -f"
+  line
 
   if [[ -z "$HOST_VALUE" ]]; then
     warn "当前配置为对外监听（0.0.0.0/全部网卡）。请务必搭配防火墙、反向代理或 TLS。"
@@ -574,13 +637,21 @@ read_first_api_key() {
   ' "$file" 2>/dev/null || true
 }
 
+get_lan_ip() {
+  ip route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' || true
+}
+
+get_public_ip() {
+  curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || true
+}
+
 show_current_params() {
   headline "显示当前安装参数"
   collect_existing_install_info
 
   local cfg="$CONFIG_DIR/config.yaml"
   local host port auth_dir api_key allow_remote secret_key ws_auth
-  local enabled_state active_state service_exists
+  local enabled_state active_state service_exists lan_ip public_ip
 
   service_exists="否"
   enabled_state="未知"
@@ -610,26 +681,67 @@ show_current_params() {
     api_key=""
   fi
 
-  cat <<EOF
-服务名：             ${SERVICE_NAME}
-服务文件存在：       ${service_exists}
-开机自启状态：       ${enabled_state}
-当前运行状态：       ${active_state}
-二进制路径：         ${BIN_PATH}
-程序目录：           ${INSTALL_DIR}
-配置目录：           ${CONFIG_DIR}
-数据目录：           ${DATA_DIR}
-日志目录：           ${LOG_DIR}
-配置文件：           ${cfg}
-监听地址：           ${host:-未读取到}
-监听端口：           ${port:-未读取到}
-Web 后台端口：       ${port:-未读取到}（与服务端口共用）
-认证目录：           ${auth_dir:-未读取到}
-客户端 API Key：     ${api_key:-未读取到}
-Web 后台远程访问：   ${allow_remote:-未读取到}
-Web 后台登录密码：   ${secret_key:-未读取到}
-WebSocket 鉴权：     ${ws_auth:-未读取到}
-EOF
+  lan_ip="$(get_lan_ip)"
+  public_ip="$(get_public_ip)"
+
+  section "服务状态"
+  kv "服务名" "${SERVICE_NAME}"
+  kv "服务文件存在" "${service_exists}"
+  kv "开机自启状态" "${enabled_state}"
+  kv "当前运行状态" "${active_state}"
+
+  section "路径信息"
+  kv "二进制路径" "${BIN_PATH}"
+  kv "程序目录" "${INSTALL_DIR}"
+  kv "配置目录" "${CONFIG_DIR}"
+  kv "数据目录" "${DATA_DIR}"
+  kv "日志目录" "${LOG_DIR}"
+  kv "配置文件" "${cfg}"
+
+  section "运行参数"
+  kv "监听地址" "${host:-未读取到}"
+  kv "监听端口" "${port:-未读取到}"
+  kv "Web 后台端口" "${port:-未读取到}（与服务端口共用）"
+  kv "认证目录" "${auth_dir:-未读取到}"
+  kv "客户端 API Key" "${api_key:-未读取到}"
+  kv "Web 后台远程访问" "${allow_remote:-未读取到}"
+  kv "Web 后台登录密码" "${secret_key:-未读取到}"
+  kv "WebSocket 鉴权" "${ws_auth:-未读取到}"
+
+  section "访问地址"
+  kv "本机访问地址" "http://127.0.0.1:${port:-未读取到}"
+  kv "局域网访问地址" "${lan_ip:+http://${lan_ip}:${port}}${lan_ip:-未获取到}"
+  kv "公网访问地址" "${public_ip:+http://${public_ip}:${port}}${public_ip:-未获取到}"
+  line
+}
+
+start_service() {
+  headline "启动服务"
+  collect_existing_install_info
+
+  if ! systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
+    error "未检测到 systemd 服务：${SERVICE_NAME}"
+    return 1
+  fi
+
+  systemctl daemon-reload
+  systemctl start "$SERVICE_NAME"
+  sleep 2
+  systemctl --no-pager --full status "$SERVICE_NAME" || true
+}
+
+stop_service() {
+  headline "停止服务"
+  collect_existing_install_info
+
+  if ! systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
+    error "未检测到 systemd 服务：${SERVICE_NAME}"
+    return 1
+  fi
+
+  systemctl stop "$SERVICE_NAME"
+  sleep 2
+  systemctl --no-pager --full status "$SERVICE_NAME" || true
 }
 
 restart_service() {
@@ -645,6 +757,31 @@ restart_service() {
   systemctl restart "$SERVICE_NAME"
   sleep 2
   systemctl --no-pager --full status "$SERVICE_NAME" || true
+}
+
+show_service_status() {
+  headline "查看服务状态"
+  collect_existing_install_info
+
+  if ! systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
+    error "未检测到 systemd 服务：${SERVICE_NAME}"
+    return 1
+  fi
+
+  systemctl --no-pager --full status "$SERVICE_NAME" || true
+}
+
+show_service_logs() {
+  headline "查看实时日志"
+  collect_existing_install_info
+
+  if ! systemctl list-unit-files | grep -q "^${SERVICE_NAME}\.service"; then
+    error "未检测到 systemd 服务：${SERVICE_NAME}"
+    return 1
+  fi
+
+  info "按 Ctrl+C 退出日志查看。"
+  journalctl -u "$SERVICE_NAME" -f --no-pager || true
 }
 
 update_program() {
@@ -688,14 +825,13 @@ uninstall_program() {
   headline "卸载 CLIProxyAPI"
   collect_existing_install_info
 
-  echo "即将卸载以下内容："
-  echo "  服务名：   $SERVICE_NAME"
-  echo "  二进制：   $BIN_PATH"
-  echo "  配置目录： $CONFIG_DIR"
-  echo "  程序目录： $INSTALL_DIR"
-  echo "  数据目录： $DATA_DIR"
-  echo "  日志目录： $LOG_DIR"
-  echo
+  show_warn_box "即将卸载以下内容" \
+    "服务名：$SERVICE_NAME" \
+    "二进制：$BIN_PATH" \
+    "配置目录：$CONFIG_DIR" \
+    "程序目录：$INSTALL_DIR" \
+    "数据目录：$DATA_DIR" \
+    "日志目录：$LOG_DIR"
   warn "卸载操作可能删除配置、认证信息和日志，请确认后继续。"
 
   local remove_config remove_data remove_logs remove_program
@@ -735,6 +871,7 @@ do_install() {
   headline "安装 CLIProxyAPI"
   choose_install_method
   collect_install_settings
+  step "准备目录结构"
   prepare_dirs
 
   case "$INSTALL_METHOD" in
@@ -751,17 +888,19 @@ do_install() {
 }
 
 show_menu() {
-  echo
-  echo "===================================="
-  echo "      CLIProxyAPI 中文管理脚本"
-  echo "===================================="
-  echo "1) 安装 CLIProxyAPI"
-  echo "2) 更新 CLIProxyAPI"
-  echo "3) 重启 CLIProxyAPI 服务"
-  echo "4) 显示当前安装参数"
-  echo "5) 卸载 CLIProxyAPI"
-  echo "6) 退出"
-  echo
+  show_banner
+  echo -e "${BOLD}请选择操作：${RESET}"
+  echo -e "  ${GREEN}1)${RESET} 安装 CLIProxyAPI"
+  echo -e "  ${GREEN}2)${RESET} 更新 CLIProxyAPI"
+  echo -e "  ${GREEN}3)${RESET} 启动 CLIProxyAPI 服务"
+  echo -e "  ${GREEN}4)${RESET} 停止 CLIProxyAPI 服务"
+  echo -e "  ${GREEN}5)${RESET} 重启 CLIProxyAPI 服务"
+  echo -e "  ${GREEN}6)${RESET} 查看服务状态"
+  echo -e "  ${GREEN}7)${RESET} 查看实时日志"
+  echo -e "  ${GREEN}8)${RESET} 显示当前安装参数"
+  echo -e "  ${GREEN}9)${RESET} 卸载 CLIProxyAPI"
+  echo -e "  ${GREEN}0)${RESET} 退出脚本"
+  line
 }
 
 main() {
@@ -769,19 +908,25 @@ main() {
   while true; do
     show_menu
     local choice
-    choice="$(prompt '请选择操作' '1')"
+    choice="$(prompt '请输入菜单编号' '1')"
     case "$choice" in
       1) do_install ;;
       2) update_program ;;
-      3) restart_service ;;
-      4) show_current_params ;;
-      5) uninstall_program ;;
-      6)
-        echo "已退出。"
+      3) start_service ;;
+      4) stop_service ;;
+      5) restart_service ;;
+      6) show_service_status ;;
+      7) show_service_logs ;;
+      8) show_current_params ;;
+      9) uninstall_program ;;
+      0)
+        success "已退出脚本。"
         exit 0
         ;;
       *) warn "无效选项，请重新输入。" ;;
     esac
+    echo
+    read -r -p "按回车键返回主菜单..." _ || true
   done
 }
 
