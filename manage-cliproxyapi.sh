@@ -86,6 +86,10 @@ full_backup_file() {
   echo "$HOME/cliproxyapi-full-backup-$(_timestamp).tar.gz"
 }
 
+ensure_deploy_dir() {
+  mkdir -p "$DEPLOY"
+}
+
 status_info() {
   echo "== 部署目录 =="
   echo "$DEPLOY"
@@ -96,6 +100,14 @@ status_info() {
     cat "$VERSION_PATH"
   else
     echo "未找到 version.txt"
+  fi
+  echo
+
+  echo "== 配置文件 =="
+  if [ -f "$CONFIG_PATH" ]; then
+    ls -lh "$CONFIG_PATH"
+  else
+    echo "未找到 config.yaml（首次安装后可按需自行添加）"
   fi
   echo
 
@@ -125,6 +137,12 @@ stop_app() {
 }
 
 restart_app() {
+  ensure_deploy_dir
+  if [ ! -x "$BIN_PATH" ]; then
+    echo "未检测到已安装二进制：$BIN_PATH"
+    echo "请先执行“更新到最新版本（保留数据）”，脚本会自动完成首次安装。"
+    return 1
+  fi
   echo "重启中..."
   stop_app || true
   cd "$DEPLOY"
@@ -138,6 +156,11 @@ restart_app() {
 install_autostart() {
   if ! command -v systemctl >/dev/null 2>&1; then
     echo "当前系统没有 systemd/systemctl，无法配置开机自启"
+    return 1
+  fi
+  if [ ! -x "$BIN_PATH" ]; then
+    echo "未检测到已安装二进制：$BIN_PATH"
+    echo "请先执行“更新到最新版本（保留数据）”，脚本会自动完成首次安装。"
     return 1
   fi
 
@@ -183,20 +206,15 @@ create_backup() {
 
 create_full_backup() {
   local tarball
+  ensure_deploy_dir
   tarball="$(full_backup_file)"
   tar -czf "$tarball" -C "$HOME" "$(basename "$DEPLOY")"
   echo "$tarball"
 }
 
-update_latest() {
-  local tag ver url tmp backup newbin newstatic
-  tag="$(latest_tag)"
-  ver="${tag#v}"
-  url="https://github.com/${REPO}/releases/download/${tag}/CLIProxyAPI_${ver}_linux_amd64.tar.gz"
-
-  echo "准备更新到: $tag"
-  backup="$(create_backup)"
-  echo "已创建备份: $backup"
+install_release_files() {
+  local tag="$1" ver="$2" url="$3" tmp newbin newstatic
+  ensure_deploy_dir
 
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
@@ -216,13 +234,45 @@ update_latest() {
 
   newstatic="$(find . -type d -name static | head -n1 || true)"
   if [ -n "${newstatic:-}" ]; then
-    mv "$DEPLOY/static" "$DEPLOY/static.bak.$(date +%s)" 2>/dev/null || true
+    if [ -d "$DEPLOY/static" ]; then
+      mv "$DEPLOY/static" "$DEPLOY/static.bak.$(date +%s)" 2>/dev/null || true
+    fi
     cp -a "$newstatic" "$DEPLOY/static"
   fi
 
   mv "$BIN_PATH.new" "$BIN_PATH"
   printf "%s\n" "$ver" > "$VERSION_PATH"
+}
 
+fresh_install() {
+  local tag ver url
+  tag="$(latest_tag)"
+  ver="${tag#v}"
+  url="https://github.com/${REPO}/releases/download/${tag}/CLIProxyAPI_${ver}_linux_amd64.tar.gz"
+
+  echo "检测到当前为全新环境，开始首次安装: $tag"
+  install_release_files "$tag" "$ver" "$url"
+  echo "首次安装完成: $tag"
+  echo "说明：若后续需要自定义配置，可在 $CONFIG_PATH 自行添加 config.yaml"
+  restart_app || true
+}
+
+update_latest() {
+  local tag ver url backup
+  tag="$(latest_tag)"
+  ver="${tag#v}"
+  url="https://github.com/${REPO}/releases/download/${tag}/CLIProxyAPI_${ver}_linux_amd64.tar.gz"
+
+  if [ ! -x "$BIN_PATH" ]; then
+    fresh_install
+    return 0
+  fi
+
+  echo "准备更新到: $tag"
+  backup="$(create_backup)"
+  echo "已创建备份: $backup"
+
+  install_release_files "$tag" "$ver" "$url"
   restart_app
   echo "更新完成: $tag"
   echo "备份目录: $backup"
@@ -310,9 +360,5 @@ main_menu() {
   done
 }
 
-if [ ! -d "$DEPLOY" ]; then
-  echo "部署目录不存在: $DEPLOY"
-  exit 1
-fi
-
+ensure_deploy_dir
 main_menu
