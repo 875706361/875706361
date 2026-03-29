@@ -112,15 +112,59 @@ status_info() {
   echo
 }
 
+stop_app() {
+  echo "停止中..."
+  pkill -f "/root/cliproxyapi/${BIN_NAME}|./${BIN_NAME}" || true
+  sleep 1
+  if pgrep -af "$BIN_NAME" >/dev/null 2>&1; then
+    echo "仍检测到进程："
+    pgrep -af "$BIN_NAME" || true
+  else
+    echo "已停止"
+  fi
+}
+
 restart_app() {
   echo "重启中..."
-  pkill -f "/root/cliproxyapi/${BIN_NAME}|./${BIN_NAME}" || true
+  stop_app || true
   cd "$DEPLOY"
   nohup "./${BIN_NAME}" > "$LOG_PATH" 2>&1 &
   disown || true
   sleep 2
   echo "已重启"
   pgrep -af "$BIN_NAME" || true
+}
+
+install_autostart() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "当前系统没有 systemd/systemctl，无法配置开机自启"
+    return 1
+  fi
+
+  cat > "$SERVICE_PATH" <<EOF
+[Unit]
+Description=CLIProxyAPI Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$DEPLOY
+ExecStart=$BIN_PATH
+Restart=always
+RestartSec=3
+User=$(id -un)
+Environment=HOME=$HOME
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  cp -f "$SERVICE_PATH" /etc/systemd/system/cliproxyapi.service
+  systemctl daemon-reload
+  systemctl enable cliproxyapi.service
+  systemctl restart cliproxyapi.service
+  echo "已启用开机自启并重启服务"
+  systemctl status cliproxyapi.service --no-pager -l | sed -n '1,20p' || true
 }
 
 create_backup() {
@@ -234,9 +278,11 @@ main_menu() {
     echo "1) 更新到最新版本（保留数据）"
     echo "2) 回滚到备份版本"
     echo "3) 重启当前服务"
-    echo "4) 查看当前状态"
-    echo "5) 查看最近日志"
-    echo "6) 创建整目录压缩备份"
+    echo "4) 停止当前服务"
+    echo "5) 安装/启用开机自启（systemd）"
+    echo "6) 查看当前状态"
+    echo "7) 查看最近日志"
+    echo "8) 创建整目录压缩备份"
     echo "0) 退出"
     echo
 
@@ -245,9 +291,11 @@ main_menu() {
       1) update_latest ;;
       2) rollback_menu ;;
       3) restart_app ;;
-      4) status_info ;;
-      5) show_logs ;;
-      6)
+      4) stop_app ;;
+      5) install_autostart ;;
+      6) status_info ;;
+      7) show_logs ;;
+      8)
         f="$(create_full_backup)"
         echo "已创建整目录备份: $f"
         ;;
