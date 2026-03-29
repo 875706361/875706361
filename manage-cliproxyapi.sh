@@ -19,12 +19,56 @@ need_cmd() {
   }
 }
 
+install_pkg_apt() {
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y
+  apt-get install -y curl tar findutils procps coreutils grep sed
+}
+
+install_pkg_dnf() {
+  dnf install -y curl tar findutils procps-ng coreutils grep sed
+}
+
+install_pkg_yum() {
+  yum install -y curl tar findutils procps-ng coreutils grep sed
+}
+
+install_pkg_apk() {
+  apk add --no-cache curl tar findutils procps coreutils grep sed
+}
+
+auto_install_deps() {
+  local missing=0
+  for cmd in curl tar find pgrep pkill install grep sed; do
+    command -v "$cmd" >/dev/null 2>&1 || missing=1
+  done
+  [ "$missing" -eq 0 ] && return 0
+
+  echo "检测到缺少依赖，尝试自动安装..."
+  if command -v apt-get >/dev/null 2>&1; then
+    install_pkg_apt
+  elif command -v dnf >/dev/null 2>&1; then
+    install_pkg_dnf
+  elif command -v yum >/dev/null 2>&1; then
+    install_pkg_yum
+  elif command -v apk >/dev/null 2>&1; then
+    install_pkg_apk
+  else
+    echo "无法识别包管理器，请手动安装：curl tar findutils procps coreutils grep sed"
+    exit 1
+  fi
+}
+
+auto_install_deps
+
 need_cmd curl
 need_cmd tar
 need_cmd find
 need_cmd pgrep
 need_cmd pkill
 need_cmd install
+need_cmd grep
+need_cmd sed
 
 _timestamp() {
   date +%F-%H%M%S
