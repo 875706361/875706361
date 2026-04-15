@@ -33,6 +33,22 @@ echo "------------------------------------------------------------"
 }
 
 # ------------------- 检查工具 -------------------
+# ------------------- UI \u52a9\u7684\u51fd\u6570 -------------------
+print_separator(){ echo -e "${MAGENTA}----------------------------------------${NC}"; }
+run_step(){
+    local desc="$1"
+    shift
+    info "${desc}..."
+    "$@"
+    local status=$?
+    if [ $status -eq 0 ]; then
+        success "${desc} \u5b8c\u6210"
+    else
+        error "${desc} \u5931\u8d25 (code $status)"
+        exit $status
+    fi
+}
+
 check_requirements(){
     local missing=()
     for cmd in git python3 python3-venv; do
@@ -185,12 +201,13 @@ uninstall_cli(){
 # ------------------- 主菜单 -------------------
 main_menu(){
     while true; do
+        print_separator
         echo -e "${MAGENTA}请选择操作:${NC}"
-        echo "1) 安装 CLIProxyAPI"
-        echo "2) 重启 CLIProxyAPI 服务"
-        echo "3) 查看安装信息"
-        echo "4) 卸载 CLIProxyAPI"
-        echo "0) 退出"
+        echo -e "${CYAN}1)${NC} 安装 CLIProxyAPI"
+        echo -e "${CYAN}2)${NC} 重启 CLIProxyAPI 服务"
+        echo -e "${CYAN}3)${NC} 查看安装信息"
+        echo -e "${CYAN}4)${NC} 卸载 CLIProxyAPI"
+        echo -e "${CYAN}0)${NC} 退出"
         read -rp "输入选项 [0-4]: " CHOICE
         case $CHOICE in
             1) install_cli_proxy ;;
