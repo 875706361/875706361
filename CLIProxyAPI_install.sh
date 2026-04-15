@@ -32,7 +32,24 @@ echo -e "${CYAN}$(date '+%Y-%m-%d %H:%M:%S')${NC}"
 echo "------------------------------------------------------------"
 }
 
-# ------------------- 检查工具 -------------------
+# ------------------- 安装 Python 依赖（含自动系统依赖） -------------------
+install_python_requirements(){
+    # 常见的系统构建依赖，防止编译 C 扩展失败
+    local sys_deps=(build-essential libssl-dev libffi-dev python3-dev)
+    info "检查并安装系统依赖: ${sys_deps[*]}"
+    $SUDO apt-get update -y
+    $SUDO apt-get install -y "${sys_deps[@]}"
+
+    info "安装 Python 依赖 (requirements.txt)"
+    # 使用 pip 安装，如果失败则尝试重新安装系统依赖后再重试一次
+    if ! pip install -r requirements.txt; then
+        warn "第一次 pip 安装失败，重新安装系统依赖后再尝试一次"
+        $SUDO apt-get install -y "${sys_deps[@]}"
+        pip install -r requirements.txt || error "pip 安装仍失败，请检查 requirements.txt 内容"
+    fi
+    success "Python 依赖已成功安装"
+}
+
 # ------------------- UI \u52a9\u7684\u51fd\u6570 -------------------
 print_separator(){ echo -e "${MAGENTA}----------------------------------------${NC}"; }
 run_step(){
@@ -103,12 +120,10 @@ install_cli_proxy(){
         python3 -m venv "$VENV_DIR"
     fi
 
-    # 6. 安装 Python 依赖
+    # 6. 安装 Python 依赖（自动系统依赖）
     source "$VENV_DIR/bin/activate"
     if [[ -f requirements.txt ]]; then
-        info "安装 Python 依赖..."
-        pip install --upgrade pip setuptools
-        pip install -r requirements.txt
+        run_step "安装 Python 依赖" install_python_requirements
     else
         warn "未找到 requirements.txt，跳过 pip 安装"
     fi
