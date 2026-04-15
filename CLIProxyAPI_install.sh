@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Version: 2024-04-15-01
+
 
 # Interactive installation script for CLIProxyAPI
 # Repository: https://github.com/router-for-me/CLIProxyAPI
