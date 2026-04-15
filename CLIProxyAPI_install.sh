@@ -185,20 +185,19 @@ uninstall_cli(){
 # ------------------- 主菜单 -------------------
 main_menu(){
     while true; do
-        print_header
         echo -e "${MAGENTA}请选择操作:${NC}"
         echo "1) 安装 CLIProxyAPI"
-        echo "2) 重启已安装的服务"
+        echo "2) 重启 CLIProxyAPI 服务"
         echo "3) 查看安装信息"
         echo "4) 卸载 CLIProxyAPI"
-        echo "5) 退出"
-        read -rp "输入选项 [1-5]: " CHOICE
+        echo "0) 退出"
+        read -rp "输入选项 [0-4]: " CHOICE
         case $CHOICE in
             1) install_cli_proxy ;;
             2) restart_service ;;
             3) show_info ;;
             4) uninstall_cli ;;
-            5) echo "祝使用愉快！"; break ;;
+            0) echo "祝使用愉快！"; break ;;
             *) warn "无效选项，请重新输入" ;;
         esac
         pause
