@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Pushed by Hermes Agent
 # Version: 2024-04-15-02
 
 set -e
@@ -108,7 +107,7 @@ install_cli_proxy(){
         git pull origin main
     else
         info "克隆仓库到 $INSTALL_DIR"
-        $SUDO git clone https://github.com/router-for-me/CLIProxyAPI "$INSTALL_DIR"
+        $SUDO git clone https://github.com/router-for-me/Cli-Proxy-API-Management-Center "$INSTALL_DIR"
         cd "$INSTALL_DIR"
     fi
 
